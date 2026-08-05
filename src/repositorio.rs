@@ -176,6 +176,93 @@ ORDER BY bm25(rag_chunks_fts) LIMIT ?{}",
         rows.next().and_then(|r| r.ok())
     }
 
+    /// Snapshot lógico del corpus para reproducibilidad (PLAN §6.9): versión
+    /// de esquema, conteos por tabla, `max(updated_at)` y hash agregado de
+    /// `source_text_hash` de chunks. Barato (no fila por fila) y estable: dos
+    /// jobs «idénticos» ven el mismo corpus si y solo si el snapshot coincide.
+    pub fn snapshot_corpus(&self) -> Result<String, String> {
+        let schema = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM _migrations", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(0);
+
+        let tablas = [
+            "items",
+            "collections",
+            "rag_chunks",
+            "entities",
+            "triples",
+            "transcriptions",
+            "extractions",
+            "annotations",
+            "assets",
+        ];
+        let mut conteos: Vec<(String, i64)> = Vec::new();
+        for t in tablas {
+            let n = self
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .unwrap_or(0);
+            conteos.push((t.to_string(), n));
+        }
+
+        let max_updated = self
+            .conn
+            .query_row(
+                "SELECT MAX(u) FROM (SELECT updated_at AS u FROM items \
+                 UNION ALL SELECT updated_at FROM collections)",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
+
+        // Hash agregado de source_text_hash: FNV-1a 64 incremental.
+        let mut hash = fnv1a_inicio();
+        if let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT source_text_hash FROM rag_chunks ORDER BY id")
+        {
+            if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+                for texto in rows.flatten() {
+                    hash = fnv1a_actualizar(hash, texto.as_bytes());
+                }
+            }
+        }
+
+        serde_json::to_string(&serde_json::json!({
+            "schema": schema,
+            "conteos": conteos,
+            "max_updated_at": max_updated,
+            "hash_chunks": format!("{hash:016x}"),
+        }))
+        .map_err(|e| e.to_string())
+    }
+}
+
+/// Semilla FNV-1a de 64 bits.
+pub fn fnv1a_inicio() -> u64 {
+    0xcbf2_9ce4_8422_2325
+}
+
+/// Actualiza un hash FNV-1a de 64 bits con un bloque de datos.
+pub fn fnv1a_actualizar(mut hash: u64, datos: &[u8]) -> u64 {
+    for b in datos {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Hash FNV-1a de 64 bits de un bloque completo.
+pub fn fnv1a_64(datos: &[u8]) -> u64 {
+    fnv1a_actualizar(fnv1a_inicio(), datos)
+}
+
+impl RepositorioSqlite {
     /// Nombre de la colección a la que pertenece un chunk (trazabilidad
     /// afirmación → evidencia → fuente).
     pub fn coleccion_de_chunk(&self, chunk_id: &str) -> Option<String> {
