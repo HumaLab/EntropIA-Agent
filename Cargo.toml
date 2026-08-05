@@ -1,0 +1,26 @@
+[package]
+name = "entropia-agent"
+version = "0.1.0"
+edition = "2021"
+description = "PoC del motor de investigación historiográfica basado en la arquitectura de ZeroClaw"
+license = "MIT"
+
+[dependencies]
+# SQLite embebido (feature "bundled") para no depender de una librería de
+# sistema en Windows. Se abre en modo solo lectura sobre la base común de la
+# app EntropIA, sin alterar la base activa del usuario.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Cliente HTTP para OpenRouter. Se alinean los features con los de
+# EntropIA-Pro-Lite: TLS via rustls y certificados nativos del sistema.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls", "rustls-tls-native-roots"] }
+
+# Serialización del cuerpo de la petición y de la respuesta de OpenRouter.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Carga opcional de un archivo .env local (por ejemplo, OPENROUTER_API_KEY).
+dotenvy = "0.15"
+
+# Marca de tiempo para el nombre de los informes guardados.
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
