@@ -827,3 +827,16 @@ El proyecto se considera completo cuando:
    problema futuro abierto, §11#1) (Fase 4).
 5. EntropIA-Bench mide ambos modos sobre material efectivamente procesado, y la cadena de
    atribución de fallos —empezando por cobertura— guía las iteraciones (transversal).
+
+---
+
+## Deviations
+
+- El refino del plan por LLM es opcional: si el LLM no devuelve un plan JSON válido, se usa
+  el plan determinista (`construir_plan`) y la reformulación de consultas tiene variante
+  determinista (`reformular_consulta`) — el orquestador nunca queda bloqueado por el modelo.
+- La integración Tauri (Fase 4) se materializa como job API de librería (`src/api.rs`,
+  `research_start/step/pause/resume/status/events/artifacts`) probada con tests; el repo de
+  EntropIA-Pro-Lite es un crate aparte y no se modificó en este trabajo.
+- EntropIA-Bench arranca con 12 preguntas ancladas a items con chunks (3 niveles), no 50–100:
+  el banco crece en la fase de evaluación continua sin cambiar el esquema.

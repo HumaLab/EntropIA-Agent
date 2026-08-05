@@ -207,7 +207,16 @@ mod tests {
             RepositorioSqlite::abrir(crate::tests_comunes::corpus_sintetico().to_str().unwrap())
                 .unwrap();
         let db = EstadoDb::abrir_en_memoria().unwrap();
-        let dir = std::env::temp_dir().join(format!("entropia-api-{}", std::process::id()));
+        // Directorio único por test: los tests corren en paralelo y comparten
+        // el pid.
+        let dir = std::env::temp_dir().join(format!(
+            "entropia-api-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         (db, repo, dir)
     }
