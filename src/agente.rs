@@ -209,6 +209,26 @@ impl Agente {
                     None => String::new(),
                 };
                 let completo = format!("{cobertura}{texto}");
+                // Texto vacío: el modelo llamó a la herramienta sin contenido.
+                // No se guarda un archivo vacío: se pide reintentar.
+                if texto.trim().is_empty() {
+                    return "El texto del informe está vacío: todavía no se guardó. \
+                            Redactá el informe y volvé a llamar guardar_informe."
+                        .to_string();
+                }
+                // Validación determinista de citas: todo informe que cite
+                // números [n] debe cerrar con «## Fuentes citadas». Si faltan
+                // referencias, el guardado se bloquea y se le devuelve el
+                // motivo al modelo para que lo corrija en el siguiente turno.
+                let faltantes = citas_sin_referencias(&completo);
+                if faltantes > 0 {
+                    return format!(
+                        "El informe tiene {faltantes} citas numéricas pero no incluye la \
+                         sección «## Fuentes citadas» al final. Todavía no se guardó: agregá \
+                         una línea por cada número citado con la colección, el título del item \
+                         y el id del fragmento, y volvé a llamar guardar_informe."
+                    );
+                }
                 match informe::guardar(Path::new("informes"), titulo, &completo) {
                     Ok(ruta) => format!("Informe guardado en: {}", ruta.display()),
                     Err(e) => format!("No se pudo guardar el informe: {e}"),
@@ -400,6 +420,53 @@ impl Agente {
             }
             _ => format!("Herramienta desconocida: {nombre}"),
         }
+    }
+}
+
+/// Convierte el texto en un conteo de citas numéricas `[n]` presentes.
+fn contar_citas(texto: &str) -> usize {
+    let bytes = texto.as_bytes();
+    let mut n = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            let mut j = i + 1;
+            let mut hay_digito = false;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                hay_digito = true;
+                j += 1;
+            }
+            if hay_digito && j < bytes.len() && bytes[j] == b']' {
+                n += 1;
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    n
+}
+
+/// ¿El texto tiene una sección de referencias («## Fuentes citadas» /
+/// «## Referencias»)?
+fn tiene_seccion_referencias(texto: &str) -> bool {
+    texto.lines().any(|l| {
+        let t = l.trim().trim_start_matches('#').trim().to_lowercase();
+        t.starts_with("fuentes citadas") || t.starts_with("referencias")
+    })
+}
+
+/// Citas numéricas `[n]` de un informe que **no** tienen su sección de
+/// referencias al final. Devuelve 0 si no hay citas o si la sección existe.
+///
+/// Es el guardrail determinista de trazabilidad afirmación → fuente: un
+/// informe que cita números sin listar sus fuentes no se guarda.
+pub fn citas_sin_referencias(texto: &str) -> usize {
+    let citas = contar_citas(texto);
+    if citas == 0 || tiene_seccion_referencias(texto) {
+        0
+    } else {
+        citas
     }
 }
 
@@ -637,5 +704,50 @@ mod tests {
         assert!(err.contains("ENTROPIA_DB_PATH"));
         // No llegó a llamar al modelo: sin mensajes de agente.
         assert!(String::from_utf8_lossy(&salida).is_empty());
+    }
+
+    #[test]
+    fn sin_citas_no_hay_referencias_pendientes() {
+        assert_eq!(citas_sin_referencias("Informe sin citas numéricas."), 0);
+    }
+
+    #[test]
+    fn citas_con_seccion_de_referencias_estan_completas() {
+        let informe = "La huelga comenzó en marzo [1].\n\n## Fuentes citadas\n\n[1] Conflicto SOIP 1965-66, «65-03-17-a», ragchk-abc.";
+        assert_eq!(citas_sin_referencias(informe), 0);
+    }
+
+    #[test]
+    fn citas_sin_seccion_devuelven_el_conteo() {
+        let informe = "La huelga comenzó en marzo [1] y duró tres días [2].";
+        assert_eq!(citas_sin_referencias(informe), 2);
+        // No confunde otras referencias entre corchetes con citas numéricas.
+        assert_eq!(citas_sin_referencias("texto [evidencia] [12]"), 1);
+    }
+
+    #[test]
+    fn la_seccion_referencias_se_detecta_sin_materia_de_encabezado() {
+        let informe = "Texto [1].\n\nFuentes citadas:\n[1] Colección, título, id.";
+        assert_eq!(citas_sin_referencias(informe), 0);
+    }
+
+    #[test]
+    fn el_guardar_informe_bloquea_el_texto_vacio() {
+        // La herramienta guardar_informe con args vacíos no debe crear un
+        // archivo basura: devuelve feedback para reintentar antes de guardar.
+        let repo =
+            RepositorioSqlite::abrir(crate::tests_comunes::corpus_sintetico().to_str().unwrap())
+                .unwrap();
+        let cliente = ClienteLlmOpenRouter::new("clave-de-prueba", "modelo-de-prueba");
+        let agente = Agente::new(cliente, None, Some(repo));
+        let args = serde_json::json!({});
+        let mut salida = Vec::new();
+        let resultado =
+            agente.ejecutar_herramienta("guardar_informe", &args, &mut salida, &io::stdin());
+        assert!(
+            resultado.contains("texto del informe está vacío"),
+            "debe pedir reintentar: {resultado}"
+        );
+        assert!(resultado.contains("no se guardó"));
     }
 }
