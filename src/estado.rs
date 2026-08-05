@@ -14,7 +14,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 /// Versión de esquema actual del estado del agente.
-pub const VERSION_ESQUEMA: i64 = 2;
+pub const VERSION_ESQUEMA: i64 = 3;
 
 /// Migraciones incrementales: índice i → versión i+1.
 ///
@@ -245,6 +245,21 @@ CREATE TABLE source_temporal_metadata (
   derivation TEXT
 );
 "#,
+    // Migración 3 — Fase 3 (Modo 2): snapshot recuperable por versión de una
+    // fuente (PLAN §7.1). Para `entropia_chunk` la versión es chunk_id +
+    // corpus_snapshot_id y no necesita fila: la tabla existe recién cuando
+    // entran Zotero y las fuentes externas.
+    r#"
+CREATE TABLE source_versions (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  retrieved_at INTEGER NOT NULL,
+  content_hash TEXT,
+  metadata TEXT,
+  excerpt TEXT,
+  UNIQUE (source_id, retrieved_at)
+);
+"#,
 ];
 
 /// Base de estado del agente (escritura).
@@ -367,7 +382,7 @@ mod tests {
     #[test]
     fn la_base_nueva_aplica_las_migraciones() {
         let db = EstadoDb::abrir_en_memoria().unwrap();
-        assert_eq!(db.version_esquema(), 2);
+        assert_eq!(db.version_esquema(), 3);
     }
 
     #[test]
@@ -378,10 +393,10 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let db = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db.version_esquema(), 2);
+        assert_eq!(db.version_esquema(), 3);
         drop(db);
         let db2 = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db2.version_esquema(), 2);
+        assert_eq!(db2.version_esquema(), 3);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -433,6 +448,8 @@ mod tests {
                 "falta la tabla {tabla}"
             );
         }
+        // source_versions nace en la migración 3 (Fase 3, Modo 2).
+        assert!(tablas.contains(&"source_versions".to_string()));
     }
 
     #[test]

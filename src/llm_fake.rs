@@ -63,10 +63,10 @@ impl ClienteLlm for LlmGrabador {
     }
 }
 
-/// Fake para el e2e del orquestador: extrae del mensaje de usuario el primer
-/// id de evidencia (`[ev-…]`) y su cita, y emite una síntesis cuyo claim es
-/// exactamente la cita (entailment determinista → supported). Ante un mensaje
-/// sin evidencia devuelve una síntesis sin claims.
+/// Fake para el e2e del orquestador/paper: extrae del mensaje de usuario todas
+/// las evidencias (`[ev-…]` + cita) y emite una síntesis con una afirmación por
+/// evidencia, cuyo texto es exactamente la cita (entailment determinista →
+/// supported). Ante un mensaje sin evidencia devuelve una síntesis sin claims.
 pub struct LlmSintetizaEvidencia;
 
 impl ClienteLlm for LlmSintetizaEvidencia {
@@ -80,15 +80,17 @@ impl ClienteLlm for LlmSintetizaEvidencia {
             .filter_map(|m| m["content"].as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        if let Some((id, cita)) = primera_evidencia(&contenido_usuario) {
-            Ok(TurnoAgente::Texto(format!(
-                "Resumen del stage.\nAFIRMACIÓN: {cita}\nEVIDENCIA: {id}"
-            )))
-        } else {
-            Ok(TurnoAgente::Texto(
+        let evidencias = todas_las_evidencias(&contenido_usuario);
+        if evidencias.is_empty() {
+            return Ok(TurnoAgente::Texto(
                 "Resumen del stage sin afirmaciones.".into(),
-            ))
+            ));
         }
+        let mut texto = String::from("Resumen del stage.\n");
+        for (id, cita) in evidencias {
+            texto.push_str(&format!("AFIRMACIÓN: {cita}\nEVIDENCIA: {id}\n"));
+        }
+        Ok(TurnoAgente::Texto(texto))
     }
 
     fn modelo(&self) -> &str {
@@ -96,9 +98,9 @@ impl ClienteLlm for LlmSintetizaEvidencia {
     }
 }
 
-/// Extrae `(id, cita)` de la primera evidencia del bloque de datos
-/// (`[ev-…] (fuente: …)` seguido de la línea de cita).
-fn primera_evidencia(contenido: &str) -> Option<(String, String)> {
+/// Extrae `(id, cita)` de todas las evidencias del bloque de datos.
+fn todas_las_evidencias(contenido: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
     let mut lineas = contenido.lines();
     while let Some(l) = lineas.next() {
         if let Some(resto) = l.strip_prefix('[') {
@@ -106,11 +108,11 @@ fn primera_evidencia(contenido: &str) -> Option<(String, String)> {
                 if id.starts_with("ev-") {
                     let cita = lineas.next().unwrap_or("").trim().to_string();
                     if !cita.is_empty() {
-                        return Some((id.to_string(), cita));
+                        out.push((id.to_string(), cita));
                     }
                 }
             }
         }
     }
-    None
+    out
 }

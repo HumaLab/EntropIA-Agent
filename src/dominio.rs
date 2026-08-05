@@ -592,6 +592,69 @@ impl<'a> Ledger<'a> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+
+    // ── source_versions (Fase 3, Modo 2) ─────────────────────────────────
+
+    /// Registra un snapshot recuperable de una fuente (Zotero / externa):
+    /// metadata bibliográfica congelada + excerpt cuando el texto es accesible.
+    pub fn registrar_version_fuente(
+        &self,
+        source_id: &str,
+        metadata: &str,
+        excerpt: Option<&str>,
+    ) -> Result<String, String> {
+        let id = nuevo_id("sv");
+        let content_hash = format!("{:016x}", crate::repositorio::fnv1a_64(metadata.as_bytes()));
+        self.db
+            .conn()
+            .execute(
+                "INSERT INTO source_versions (id, source_id, retrieved_at, content_hash, \
+                 metadata, excerpt) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, source_id, ahora(), content_hash, metadata, excerpt],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(id)
+    }
+
+    /// ¿La fuente tiene texto accesible (excerpt capturado)?
+    pub fn fuente_tiene_texto(&self, source_id: &str) -> bool {
+        self.db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM source_versions WHERE source_id = ?1 \
+                 AND excerpt IS NOT NULL AND excerpt != '')",
+                params![source_id],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap_or(false)
+    }
+
+    /// Clases de provenance (1–4) de las evidencias de un claim, derivadas del
+    /// `kind` de sus fuentes (PLAN §3).
+    pub fn clases_del_claim(&self, claim_id: &str) -> Vec<u8> {
+        let Ok(mut stmt) = self.db.conn().prepare(
+            "SELECT DISTINCT s.kind FROM claim_evidence ce \
+             JOIN evidence e ON e.id = ce.evidence_id \
+             JOIN sources s ON s.id = e.source_id WHERE ce.claim_id = ?1",
+        ) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![claim_id], |r| r.get::<_, String>(0)) else {
+            return Vec::new();
+        };
+        rows.filter_map(|r| r.ok())
+            .filter_map(|k| {
+                let clase = match k.as_str() {
+                    "entropia_chunk" => 1,
+                    "agent_report" => 2,
+                    "zotero" => 3,
+                    "external" => 4,
+                    _ => return None,
+                };
+                Some(clase)
+            })
+            .collect()
+    }
 }
 
 /// Normaliza una cita para comparación: minúsculas y espacios colapsados.
