@@ -11,6 +11,7 @@
 //! Fase 1.
 
 pub mod agente;
+pub mod api;
 pub mod bench;
 pub mod cliente_llm;
 pub mod configuracion;

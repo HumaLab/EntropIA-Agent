@@ -122,25 +122,22 @@ impl<'a> MotorInvestigacion<'a> {
         Ok(job.id)
     }
 
-    /// Ejecuta el plan de un job existente (resume incluido).
+    /// Ejecuta el plan de un job existente (resume incluido): prepara el plan,
+    /// ejecuta todos los stages y cierra con el informe ensamblado.
     pub fn ejecutar_job(&self, job_id: &str, pedido: &str) -> Result<(), String> {
+        self.preparar_job(job_id, pedido)?;
+        while self.ejecutar_siguiente_stage(job_id)? {}
+        self.cerrar_con_informe(job_id)?;
+        Ok(())
+    }
+
+    /// Prepara el plan de un job: memoria longitudinal, plan persistido,
+    /// stages del DAG y validación. Pensado para el step API (Fase 4).
+    pub fn preparar_job(&self, job_id: &str, pedido: &str) -> Result<(), String> {
         let job = self
             .motor
             .obtener_job(job_id)
             .ok_or_else(|| format!("Job inexistente: {job_id}"))?;
-
-        // Memoria longitudinal: retomar un informe previo (PLAN Fase 2).
-        let previos = self.memoria.buscar(&job.project, pedido, 3);
-        let memoria_ctx = if previos.is_empty() {
-            String::new()
-        } else {
-            let resumen = previos
-                .iter()
-                .map(|m| format!("- {}: {}", m.title, m.content))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("\nHallazgos previos en esta línea de investigación:\n{resumen}")
-        };
 
         // Plan: base determinista, refinable por el LLM (si responde JSON).
         let plan = self
@@ -172,23 +169,61 @@ impl<'a> MotorInvestigacion<'a> {
             self.motor.cerrar(job_id, MotivoCierre::Blocked)?;
             return Err("El DAG del plan tiene un ciclo".into());
         }
+        let _ = job;
+        Ok(())
+    }
 
-        // Loop de ejecución: un stage = un worker; checkpoints entre medio.
-        while let Some(stage) = self.motor.siguiente_stage(job_id)? {
-            if self.motor.stage_reutilizable(job_id, &stage.id)? {
-                self.motor.marcar_reutilizado(job_id, &stage.id)?;
-                continue;
-            }
-            self.motor.marcar_inicio_stage(job_id, &stage.id)?;
-            let etapa = plan
-                .etapas
-                .iter()
-                .find(|e| ids_etapas.get(&e.id) == Some(&stage.id))
-                .cloned();
-            self.ejecutar_stage(job_id, &stage, &etapa, &memoria_ctx)?;
+    /// Ejecuta el siguiente stage del job (un worker por stage, con
+    /// checkpoint). Devuelve `true` si quedan stages por ejecutar.
+    pub fn ejecutar_siguiente_stage(&self, job_id: &str) -> Result<bool, String> {
+        let Some(stage) = self.motor.siguiente_stage(job_id)? else {
+            return Ok(false);
+        };
+        if self.motor.stage_reutilizable(job_id, &stage.id)? {
+            self.motor.marcar_reutilizado(job_id, &stage.id)?;
+            return Ok(true);
         }
+        self.motor.marcar_inicio_stage(job_id, &stage.id)?;
 
-        // Cierre: ensambla el informe final con su cobertura declarada.
+        // Contexto de memoria longitudinal (retomar informes previos).
+        let job = self
+            .motor
+            .obtener_job(job_id)
+            .ok_or_else(|| format!("Job inexistente: {job_id}"))?;
+        let previos = self.memoria.buscar(&job.project, &job.pregunta, 3);
+        let memoria_ctx = if previos.is_empty() {
+            String::new()
+        } else {
+            let resumen = previos
+                .iter()
+                .map(|m| format!("- {}: {}", m.title, m.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("\nHallazgos previos en esta línea de investigación:\n{resumen}")
+        };
+
+        // La etapa del plan correspondiente al stage.
+        let plan: Option<Plan> = job
+            .plan_json
+            .as_deref()
+            .and_then(|p| serde_json::from_str(p).ok());
+        let etapa = plan.and_then(|p| {
+            p.etapas
+                .iter()
+                .find(|e| {
+                    self.motor
+                        .stages(job_id)
+                        .iter()
+                        .any(|s| s.id == stage.id && s.titulo.as_deref() == Some(e.titulo.as_str()))
+                })
+                .cloned()
+        });
+        self.ejecutar_stage(job_id, &stage, &etapa, &memoria_ctx)?;
+        Ok(true)
+    }
+
+    /// Cierra el job ensamblando el informe final con su cobertura declarada.
+    pub fn cerrar_con_informe(&self, job_id: &str) -> Result<std::path::PathBuf, String> {
         let informe_path = self.ensamblar_informe(job_id)?;
         self.motor.cerrar(job_id, MotivoCierre::Completed)?;
         self.motor.registrar_evento(
@@ -197,7 +232,7 @@ impl<'a> MotorInvestigacion<'a> {
             "informe_ensamblado",
             Some(&format!("{{\"path\":\"{}\"}}", informe_path.display())),
         )?;
-        Ok(())
+        Ok(informe_path)
     }
 
     /// Refinamiento opcional del plan por el LLM. Si no responde un JSON
