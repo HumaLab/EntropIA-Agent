@@ -258,7 +258,9 @@ mod tests {
             "el plan debe persistirse al iniciar"
         );
 
-        // research_step: un stage por llamada hasta terminar.
+        // research_step: un stage por llamada hasta terminar. Con el contrato
+        // correcto de ejecutar_siguiente_stage, el último paso cierra el job:
+        // no hay pasos fantasma.
         let mut pasos = 0;
         loop {
             let progreso = api.research_step(&job_id).unwrap();
@@ -270,10 +272,7 @@ mod tests {
             }
             assert!(pasos < 10, "el DAG debe converger en pocos pasos");
         }
-        assert!(
-            pasos >= 4,
-            "deben ejecutarse al menos los 4 stages del plan"
-        );
+        assert_eq!(pasos, 4, "4 stages del plan → 4 steps (el último cierra)");
         let estado = api.research_status(&job_id).unwrap();
         assert_eq!(estado.status, EstadoJob::Done);
         assert_eq!(estado.close_reason, Some(MotivoCierre::Completed));
@@ -287,10 +286,78 @@ mod tests {
         let artefactos = api.research_artifacts(&job_id).unwrap();
         assert!(artefactos.iter().any(|a| a.tipo == "seccion"));
 
-        // Pausa/reanudación sobre el job cerrado se rechaza por estado, pero
-        // el API expone la transición para jobs activos.
-        let _ = api.research_pause(&job_id);
-        let _ = api.research_resume(&job_id);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pausa_y_reanudacion_a_mitad_de_job_con_continuidad_de_checkpoint() {
+        let (db, repo, dir) = base();
+        let llm = LlmSintetizaEvidencia;
+        let api = api(&llm, &db, &repo, &dir);
+
+        // start → primer step.
+        let job_id = api
+            .research_start(
+                "¿Conflictividad en el SOIP?",
+                "soip-conflictividad",
+                "{}",
+                None,
+                None,
+            )
+            .unwrap();
+        let p1 = api.research_step(&job_id).unwrap();
+        assert!(!p1.terminado);
+        assert_eq!(
+            api.research_status(&job_id).unwrap().status,
+            EstadoJob::Running
+        );
+
+        // Pausa a mitad de job: el estado persiste y el checkpoint del primer
+        // stage ya quedó registrado.
+        api.research_pause(&job_id).unwrap();
+        assert_eq!(
+            api.research_status(&job_id).unwrap().status,
+            EstadoJob::Paused
+        );
+        let eventos_pausa = api.research_events(&job_id).unwrap();
+        assert!(eventos_pausa.iter().any(|e| e.contains("job_paused")));
+        let completados_antes: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM stages WHERE job_id = ?1 AND status = 'completed'",
+                rusqlite::params![job_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            completados_antes, 1,
+            "el primer stage quedó completo al pausar"
+        );
+
+        // Reanudar → el job vuelve a running y el step continúa desde donde
+        // quedó (los stages completados antes de la pausa no se repiten).
+        api.research_resume(&job_id).unwrap();
+        assert_eq!(
+            api.research_status(&job_id).unwrap().status,
+            EstadoJob::Running
+        );
+        let mut pasos = 1;
+        loop {
+            let progreso = api.research_step(&job_id).unwrap();
+            pasos += 1;
+            if progreso.terminado {
+                break;
+            }
+            assert!(pasos < 10);
+        }
+        // El DAG tiene 4 stages: 1 antes de la pausa + 3 después + el cierre
+        // ocurre en el último paso.
+        assert_eq!(pasos, 4, "sin pasos fantasma tras reanudar");
+        let estado = api.research_status(&job_id).unwrap();
+        assert_eq!(estado.status, EstadoJob::Done);
+        let eventos = api.research_events(&job_id).unwrap();
+        assert!(eventos.iter().any(|e| e.contains("job_paused")));
+        assert!(eventos.iter().any(|e| e.contains("job_resumed")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

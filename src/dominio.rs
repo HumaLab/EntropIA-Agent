@@ -154,7 +154,8 @@ pub struct Claim {
     pub status: Option<String>,
 }
 
-/// Un run de verificación (append-only).
+/// Un run de verificación (append-only). `obsoleto` marca los runs que la
+/// invalidación automática (§6.1) dejó fuera de la proyección del claim.
 #[derive(Debug, Clone)]
 pub struct RunVerificacion {
     pub id: String,
@@ -166,6 +167,7 @@ pub struct RunVerificacion {
     pub error_kind: Option<String>,
     pub timestamp: i64,
     pub aceptado: bool,
+    pub obsoleto: bool,
 }
 
 /// Ledger epistémico sobre `EstadoDb`.
@@ -528,7 +530,7 @@ impl<'a> Ledger<'a> {
     pub fn runs_del_claim(&self, claim_id: &str) -> Vec<RunVerificacion> {
         let Ok(mut stmt) = self.db.conn().prepare(
             "SELECT id, claim_id, estado, modelo, prompt_hash, rationale, error_kind, \
-             timestamp, aceptado FROM verification_runs WHERE claim_id = ?1 \
+             timestamp, aceptado, obsoleto FROM verification_runs WHERE claim_id = ?1 \
              ORDER BY timestamp, rowid",
         ) else {
             return Vec::new();
@@ -544,11 +546,160 @@ impl<'a> Ledger<'a> {
                 error_kind: r.get(6)?,
                 timestamp: r.get(7)?,
                 aceptado: r.get::<_, i64>(8)? != 0,
+                obsoleto: r.get::<_, i64>(9)? != 0,
             })
         }) else {
             return Vec::new();
         };
         rows.filter_map(|r| r.ok()).collect()
+    }
+
+    /// Último run aceptado **no obsoleto** de un claim (la verificación
+    /// vigente). `None` si el claim nunca se verificó o su verificación fue
+    /// invalidada por un cambio (§6.1).
+    pub fn verificacion_vigente(&self, claim_id: &str) -> Option<RunVerificacion> {
+        self.runs_del_claim(claim_id)
+            .into_iter()
+            .rev()
+            .find(|r| r.aceptado && !r.obsoleto)
+    }
+
+    // ── invalidación automática (§6.1) ────────────────────────────────────
+
+    /// Invalida la verificación vigente de un claim: marca los runs aceptados
+    /// previos como obsoletos y resetea la proyección del claim. Los runs no
+    /// se borran (append-only); quedan como historial.
+    fn invalidar_verificacion(&self, claim_id: &str) -> Result<(), String> {
+        self.db.con_transaccion(|conn| {
+            conn.execute(
+                "UPDATE verification_runs SET obsoleto = 1 \
+                 WHERE claim_id = ?1 AND aceptado = 1 AND obsoleto = 0",
+                params![claim_id],
+            )
+            .map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE claims SET status = NULL, updated_at = ?1 WHERE id = ?2",
+                params![ahora(), claim_id],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+
+    /// Edita el texto de un claim. Cualquier cambio invalida la verificación
+    /// vigente (PLAN §6.1): el claim vuelve a estado sin verificar.
+    pub fn editar_claim(&self, claim_id: &str, nuevo_texto: &str) -> Result<(), String> {
+        self.db
+            .conn()
+            .execute(
+                "UPDATE claims SET texto = ?1, updated_at = ?2 WHERE id = ?3",
+                params![nuevo_texto, ahora(), claim_id],
+            )
+            .map_err(|e| e.to_string())?;
+        self.invalidar_verificacion(claim_id)
+    }
+
+    /// Edita la cita y los offsets de una evidencia. Invalida la verificación
+    /// de **todos** los claims ligados a ella.
+    pub fn editar_evidencia(
+        &self,
+        evidence_id: &str,
+        quote: &str,
+        span_start: i64,
+        span_end: i64,
+    ) -> Result<(), String> {
+        if span_start > span_end {
+            return Err("span inválido: inicio mayor que fin".into());
+        }
+        let largo = quote.chars().count() as i64;
+        if span_end - span_start != largo {
+            return Err(format!(
+                "span inválido: la cita tiene {largo} caracteres pero el span declara {}",
+                span_end - span_start
+            ));
+        }
+        let quote_normalized_hash = format!(
+            "{:016x}",
+            crate::repositorio::fnv1a_64(&normalizar_cita(quote).into_bytes())
+        );
+        self.db.con_transaccion(|conn| {
+            conn.execute(
+                "UPDATE evidence SET quote = ?1, span_start = ?2, span_end = ?3, \
+                 quote_normalized_hash = ?4 WHERE id = ?5",
+                params![
+                    quote,
+                    span_start,
+                    span_end,
+                    quote_normalized_hash,
+                    evidence_id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            // Claims afectados → invalidar sus verificaciones.
+            let mut stmt = conn
+                .prepare("SELECT claim_id FROM claim_evidence WHERE evidence_id = ?1")
+                .map_err(|e| e.to_string())?;
+            let claims: Vec<String> = stmt
+                .query_map(params![evidence_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            for claim_id in claims {
+                conn.execute(
+                    "UPDATE verification_runs SET obsoleto = 1 \
+                     WHERE claim_id = ?1 AND aceptado = 1 AND obsoleto = 0",
+                    params![claim_id],
+                )
+                .map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE claims SET status = NULL, updated_at = ?1 WHERE id = ?2",
+                    params![ahora(), claim_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Registra una nueva versión de una fuente (Zotero/externa). El cambio de
+    /// versión invalida la verificación de los claims que citan evidencias de
+    /// esa fuente (PLAN §6.1).
+    pub fn actualizar_version_fuente(
+        &self,
+        source_id: &str,
+        metadata: &str,
+        excerpt: Option<&str>,
+    ) -> Result<String, String> {
+        let version_id = self.registrar_version_fuente(source_id, metadata, excerpt)?;
+        self.db.con_transaccion(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT DISTINCT ce.claim_id FROM claim_evidence ce \
+                     JOIN evidence e ON e.id = ce.evidence_id \
+                     WHERE e.source_id = ?1",
+                )
+                .map_err(|e| e.to_string())?;
+            let claims: Vec<String> = stmt
+                .query_map(params![source_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            for claim_id in claims {
+                conn.execute(
+                    "UPDATE verification_runs SET obsoleto = 1 \
+                     WHERE claim_id = ?1 AND aceptado = 1 AND obsoleto = 0",
+                    params![claim_id],
+                )
+                .map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE claims SET status = NULL, updated_at = ?1 WHERE id = ?2",
+                    params![ahora(), claim_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })?;
+        Ok(version_id)
     }
 
     // ── temporal + memoria ────────────────────────────────────────────────
@@ -605,12 +756,16 @@ impl<'a> Ledger<'a> {
     ) -> Result<String, String> {
         let id = nuevo_id("sv");
         let content_hash = format!("{:016x}", crate::repositorio::fnv1a_64(metadata.as_bytes()));
+        // Milisegundos: dos versiones en el mismo segundo no colisionan en el
+        // UNIQUE (source_id, retrieved_at).
+        let retrieved_at =
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
         self.db
             .conn()
             .execute(
                 "INSERT INTO source_versions (id, source_id, retrieved_at, content_hash, \
                  metadata, excerpt) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, source_id, ahora(), content_hash, metadata, excerpt],
+                params![id, source_id, retrieved_at, content_hash, metadata, excerpt],
             )
             .map_err(|e| e.to_string())?;
         Ok(id)
@@ -873,5 +1028,177 @@ mod tests {
         l.relacionar(&claim, &e2, RelacionEvidencia::Contradicts, Some(0.8))
             .unwrap();
         assert!(l.es_contested(&claim));
+    }
+
+    fn job_de_prueba(l: &Ledger) -> String {
+        l.db.conn()
+            .query_row(
+                "INSERT INTO jobs (id, modo, pregunta, status, config_snapshot, project, corpus, \
+                 created_at, updated_at) VALUES ('job-edit', 'm', 'p', 'running', '{}', 'p', 'c', 1, 1) \
+                 RETURNING id",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn editar_el_claim_invalida_la_verificacion_vigente() {
+        let db = EstadoDb::abrir_en_memoria().unwrap();
+        let l = Ledger::nuevo(&db);
+        let job_id = job_de_prueba(&l);
+        let claim = l
+            .registrar_claim(&job_id, TipoClaim::Factual, "La huelga comenzó en marzo.")
+            .unwrap();
+        l.registrar_verificacion(
+            &claim,
+            EstadoEpistemico::Supported,
+            None,
+            None,
+            None,
+            None,
+            Some("aceptado"),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            l.estado_epistemico(&claim),
+            Some(EstadoEpistemico::Supported)
+        );
+        assert!(l.verificacion_vigente(&claim).is_some());
+
+        // Cambio en el texto del claim → la verificación vigente queda obsoleta.
+        l.editar_claim(&claim, "La huelga comenzó el 17 de marzo de 1965.")
+            .unwrap();
+        assert_eq!(
+            l.estado_epistemico(&claim),
+            None,
+            "la proyección se resetea"
+        );
+        let run = l.verificacion_vigente(&claim);
+        assert!(run.is_none(), "no hay verificación vigente tras editar");
+        let runs = l.runs_del_claim(&claim);
+        assert_eq!(runs.len(), 1, "los runs no se borran (append-only)");
+        assert!(runs[0].aceptado);
+        assert!(runs[0].obsoleto, "el run aceptado previo queda obsoleto");
+
+        // Una verificación nueva (aceptada) vuelve a proyectar.
+        l.registrar_verificacion(
+            &claim,
+            EstadoEpistemico::Supported,
+            None,
+            None,
+            None,
+            None,
+            Some("re-verificado"),
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            l.estado_epistemico(&claim),
+            Some(EstadoEpistemico::Supported)
+        );
+        assert!(l.verificacion_vigente(&claim).is_some());
+    }
+
+    #[test]
+    fn editar_la_evidencia_invalida_los_claims_ligados() {
+        let db = EstadoDb::abrir_en_memoria().unwrap();
+        let l = Ledger::nuevo(&db);
+        let job_id = job_de_prueba(&l);
+        let src = l
+            .registrar_fuente(
+                ClaseFuente::EntropiaChunk,
+                Some("c1"),
+                None,
+                None,
+                None,
+                None,
+                "p",
+                "c",
+            )
+            .unwrap();
+        let ev = l
+            .registrar_evidencia(&src, "marzo", 0, 5, None, None)
+            .unwrap();
+        let claim = l
+            .registrar_claim(&job_id, TipoClaim::Factual, "La huelga fue en marzo.")
+            .unwrap();
+        l.relacionar(&claim, &ev, RelacionEvidencia::Supports, Some(0.8))
+            .unwrap();
+        l.registrar_verificacion(
+            &claim,
+            EstadoEpistemico::Supported,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            l.estado_epistemico(&claim),
+            Some(EstadoEpistemico::Supported)
+        );
+
+        // Cambio de cita y offsets → el claim ligado pierde su verificación.
+        l.editar_evidencia(&ev, "abril", 0, 5).unwrap();
+        assert_eq!(l.estado_epistemico(&claim), None);
+        assert!(l.verificacion_vigente(&claim).is_none());
+    }
+
+    #[test]
+    fn actualizar_la_version_de_la_fuente_invalida_los_claims() {
+        let db = EstadoDb::abrir_en_memoria().unwrap();
+        let l = Ledger::nuevo(&db);
+        let job_id = job_de_prueba(&l);
+        let src = l
+            .registrar_fuente(
+                ClaseFuente::Zotero,
+                Some("z1"),
+                None,
+                None,
+                None,
+                None,
+                "p",
+                "c",
+            )
+            .unwrap();
+        l.registrar_version_fuente(&src, "{\"titulo\":\"v1\"}", Some("texto v1"))
+            .unwrap();
+        let ev = l
+            .registrar_evidencia(&src, "texto v1", 0, 8, None, None)
+            .unwrap();
+        let claim = l
+            .registrar_claim(&job_id, TipoClaim::Factual, "El paper dice texto v1.")
+            .unwrap();
+        l.relacionar(&claim, &ev, RelacionEvidencia::Supports, Some(0.8))
+            .unwrap();
+        l.registrar_verificacion(
+            &claim,
+            EstadoEpistemico::Supported,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            l.estado_epistemico(&claim),
+            Some(EstadoEpistemico::Supported)
+        );
+
+        // Nueva versión de la fuente → verificación obsoleta.
+        l.actualizar_version_fuente(&src, "{\"titulo\":\"v2\"}", Some("texto v2"))
+            .unwrap();
+        assert_eq!(l.estado_epistemico(&claim), None);
+        assert!(l.verificacion_vigente(&claim).is_none());
     }
 }

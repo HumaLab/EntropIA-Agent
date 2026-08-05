@@ -174,14 +174,16 @@ impl<'a> MotorInvestigacion<'a> {
     }
 
     /// Ejecuta el siguiente stage del job (un worker por stage, con
-    /// checkpoint). Devuelve `true` si quedan stages por ejecutar.
+    /// checkpoint). Devuelve `true` si quedan stages por ejecutar (el
+    /// contrato se cumple re-consultando `siguiente_stage` después de
+    /// ejecutar o reutilizar el stage: tras el último, devuelve `false`).
     pub fn ejecutar_siguiente_stage(&self, job_id: &str) -> Result<bool, String> {
         let Some(stage) = self.motor.siguiente_stage(job_id)? else {
             return Ok(false);
         };
         if self.motor.stage_reutilizable(job_id, &stage.id)? {
             self.motor.marcar_reutilizado(job_id, &stage.id)?;
-            return Ok(true);
+            return Ok(self.motor.siguiente_stage(job_id)?.is_some());
         }
         self.motor.marcar_inicio_stage(job_id, &stage.id)?;
 
@@ -219,7 +221,9 @@ impl<'a> MotorInvestigacion<'a> {
                 .cloned()
         });
         self.ejecutar_stage(job_id, &stage, &etapa, &memoria_ctx)?;
-        Ok(true)
+        // Contrato: quedan stages solo si `siguiente_stage` todavía devuelve
+        // trabajo por hacer (tras el último stage → false).
+        Ok(self.motor.siguiente_stage(job_id)?.is_some())
     }
 
     /// Cierra el job ensamblando el informe final con su cobertura declarada.

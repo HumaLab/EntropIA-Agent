@@ -189,13 +189,15 @@ fn dentro_de_rango(fecha: &Option<CandidatoFecha>, filtros: &Filtros) -> bool {
 /// chunks ligados (PLAN §6.5, pierna de traversal).
 pub fn buscar_entidad(repo: &RepositorioSqlite, nombre: &str) -> Option<NodoEntidad> {
     let (clausula, nombres) = repo.clausula_no_excluidas_pub();
+    // ?1..?N son la denylist (clausula); el nombre de la entidad es ?N+1.
     let sql = format!(
         "SELECT e.value, e.entity_type, e.item_id, i.title, c.name \
          FROM entities e \
          JOIN items i ON i.id = e.item_id \
          JOIN collections c ON c.id = i.collection_id \
-         WHERE {clausula} AND e.value LIKE '%' || ?1 || '%' ESCAPE '\\' \
-         ORDER BY e.confidence DESC LIMIT 25"
+         WHERE {clausula} AND e.value LIKE '%' || ?{} || '%' ESCAPE '\\' \
+         ORDER BY e.confidence DESC LIMIT 25",
+        nombres.len() + 1
     );
     let mut parametros: Vec<&dyn rusqlite::ToSql> =
         nombres.iter().map(|n| n as &dyn rusqlite::ToSql).collect();
@@ -464,5 +466,51 @@ mod tests {
         let c = cobertura_recorte(&r, Some("Conflicto SOIP 1965-66"));
         assert_eq!(c.items_total, 3);
         assert_eq!(c.items_sin_procesar, 1);
+    }
+
+    #[test]
+    fn buscar_entidad_devuelve_nodo_vecinos_y_chunks_ligados() {
+        let r = repo();
+        let nodo = buscar_entidad(&r, "Sindicato")
+            .expect("la entidad del corpus sintético debe encontrarse");
+        assert_eq!(nodo.entidad, "Sindicato Obrero de la Industria del Pescado");
+        assert_eq!(nodo.tipo, "organization");
+        // Items ligados a la entidad.
+        assert!(nodo.items.iter().any(|(id, _, _)| id == "item-1"));
+        // Vecinos por triples (subject/object que mencionan la entidad).
+        assert!(nodo
+            .triples
+            .iter()
+            .any(|(s, p, o)| s.contains("Sindicato") && p == "denuncia" && o == "atropellos"));
+        // Chunks ligados a los items de la entidad.
+        assert!(
+            nodo.chunks.iter().any(|c| c.item_id == "item-1"),
+            "los chunks de los items de la entidad deben ligarse"
+        );
+    }
+
+    #[test]
+    fn filtrar_por_entidad_devuelve_solo_sus_chunks() {
+        let r = repo();
+        let pagina = buscar_con_filtros(
+            &r,
+            &Filtros {
+                entidad: Some("Sindicato".into()),
+                limite: 20,
+                offset: 0,
+                ..Default::default()
+            },
+        );
+        // item-1 tiene 2 chunks en el corpus sintético (chunk-1 y chunk-3).
+        assert_eq!(pagina.total, 2);
+        for f in &pagina.fuentes {
+            assert_eq!(f.item_id, "item-1");
+        }
+    }
+
+    #[test]
+    fn buscar_entidad_sin_resultados_devuelve_none() {
+        let r = repo();
+        assert!(buscar_entidad(&r, "EntidadInexistente").is_none());
     }
 }

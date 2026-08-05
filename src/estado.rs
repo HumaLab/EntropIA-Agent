@@ -14,7 +14,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 /// Versión de esquema actual del estado del agente.
-pub const VERSION_ESQUEMA: i64 = 3;
+pub const VERSION_ESQUEMA: i64 = 4;
 
 /// Migraciones incrementales: índice i → versión i+1.
 ///
@@ -260,6 +260,14 @@ CREATE TABLE source_versions (
   UNIQUE (source_id, retrieved_at)
 );
 "#,
+    // Migración 4 — Fase 2 (PLAN §6.1): invalidación automática. Cualquier
+    // cambio en el texto de un claim, en sus evidencias o en la versión de su
+    // source invalida la verificación vigente y la marca obsoleta. Los runs
+    // siguen siendo append-only: `obsoleto` los excluye de la proyección sin
+    // borrarlos.
+    r#"
+ALTER TABLE verification_runs ADD COLUMN obsoleto INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 /// Base de estado del agente (escritura).
@@ -382,7 +390,7 @@ mod tests {
     #[test]
     fn la_base_nueva_aplica_las_migraciones() {
         let db = EstadoDb::abrir_en_memoria().unwrap();
-        assert_eq!(db.version_esquema(), 3);
+        assert_eq!(db.version_esquema(), 4);
     }
 
     #[test]
@@ -393,10 +401,10 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let db = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db.version_esquema(), 3);
+        assert_eq!(db.version_esquema(), 4);
         drop(db);
         let db2 = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db2.version_esquema(), 3);
+        assert_eq!(db2.version_esquema(), 4);
         let _ = std::fs::remove_file(&path);
     }
 

@@ -61,7 +61,53 @@ CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(
   text_content,
   tokenize = 'unicode61 remove_diacritics 1'
 );
+CREATE TABLE entities (
+  id TEXT PRIMARY KEY NOT NULL,
+  item_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  value TEXT NOT NULL,
+  start_offset INTEGER NOT NULL DEFAULT 0,
+  end_offset INTEGER NOT NULL DEFAULT 0,
+  confidence REAL NOT NULL DEFAULT 1.0,
+  source TEXT,
+  model_name TEXT,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  latitude REAL, longitude REAL,
+  geo_status TEXT NOT NULL DEFAULT 'pending',
+  asset_id TEXT,
+  manual_lat REAL, manual_lon REAL
+);
+CREATE TABLE triples (
+  id TEXT PRIMARY KEY NOT NULL,
+  item_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  asset_id TEXT
+);
+CREATE TABLE assets (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER,
+  created_at INTEGER NOT NULL,
+  sort_index INTEGER NOT NULL DEFAULT 0,
+  parent_asset_id TEXT,
+  page_number INTEGER
+);
+CREATE TABLE _migrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  applied_at INTEGER NOT NULL
+);
 ",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO _migrations (name, applied_at) VALUES ('0001_base', 1)",
+        [],
     )
     .unwrap();
 
@@ -145,6 +191,34 @@ CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(
         )
         .unwrap();
     }
+
+    // Entidades, triples y assets de prueba (traversal del gateway, §6.5).
+    conn.execute(
+        "INSERT INTO entities (id, item_id, entity_type, value, confidence) \
+         VALUES ('ent-1', 'item-1', 'organization', \
+                 'Sindicato Obrero de la Industria del Pescado', 0.95)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO entities (id, item_id, entity_type, value, confidence) \
+         VALUES ('ent-2', 'item-2', 'place', 'Mar del Plata', 0.9)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO triples (id, item_id, subject, predicate, object) \
+         VALUES ('trip-1', 'item-1', 'el Sindicato Obrero de la Industria del Pescado', \
+                 'denuncia', 'atropellos')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets (id, item_id, path, type, created_at, sort_index, page_number) \
+         VALUES ('asset-1', 'item-1', 'escaneos/65-03-17-a.pdf', 'pdf', 1, 0, 3)",
+        [],
+    )
+    .unwrap();
 
     path
 }
