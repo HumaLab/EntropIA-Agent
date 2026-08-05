@@ -59,13 +59,7 @@ LEFT JOIN collections c ON c.id = i.collection_id";
                 })
             })
             .map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        for r in rows {
-            if let Ok(c) = r {
-                out.push(c);
-            }
-        }
-        Ok(out)
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     /// Busca identificadores de chunks por texto con FTS5 (BM25).
@@ -110,9 +104,9 @@ LEFT JOIN collections c ON c.id = i.collection_id";
         ) else {
             return Vec::new();
         };
-        let Ok(rows) = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
-        else {
+        let Ok(rows) = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        }) else {
             return Vec::new();
         };
         rows.filter_map(|r| r.ok()).collect()

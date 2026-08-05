@@ -165,9 +165,27 @@ mod tests {
     #[test]
     fn knn_ordena_los_chunks_por_cercania() {
         let chunks = vec![
-            ChunkRag { id: "a".into(), item_titulo: "".into(), coleccion: "".into(), text_content: "".into(), embedding: vec![1.0, 0.0] },
-            ChunkRag { id: "b".into(), item_titulo: "".into(), coleccion: "".into(), text_content: "".into(), embedding: vec![0.0, 1.0] },
-            ChunkRag { id: "c".into(), item_titulo: "".into(), coleccion: "".into(), text_content: "".into(), embedding: vec![0.9, 0.1] },
+            ChunkRag {
+                id: "a".into(),
+                item_titulo: "".into(),
+                coleccion: "".into(),
+                text_content: "".into(),
+                embedding: vec![1.0, 0.0],
+            },
+            ChunkRag {
+                id: "b".into(),
+                item_titulo: "".into(),
+                coleccion: "".into(),
+                text_content: "".into(),
+                embedding: vec![0.0, 1.0],
+            },
+            ChunkRag {
+                id: "c".into(),
+                item_titulo: "".into(),
+                coleccion: "".into(),
+                text_content: "".into(),
+                embedding: vec![0.9, 0.1],
+            },
         ];
         let cerca = knn(&chunks, &[1.0, 0.0]);
         assert_eq!(cerca.len(), 3);

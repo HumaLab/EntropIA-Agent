@@ -70,11 +70,16 @@ impl Agente {
                             })
                         })
                         .collect();
-                    mensajes.push(json!({ "role": "assistant", "content": null, "tool_calls": tool_calls }));
+                    mensajes.push(
+                        json!({ "role": "assistant", "content": null, "tool_calls": tool_calls }),
+                    );
 
                     for l in llamadas {
-                        let resultado = self.ejecutar_herramienta(&l.nombre, &l.argumentos, stdout, stdin);
-                        mensajes.push(json!({ "role": "tool", "tool_call_id": l.id, "content": resultado }));
+                        let resultado =
+                            self.ejecutar_herramienta(&l.nombre, &l.argumentos, stdout, stdin);
+                        mensajes.push(
+                            json!({ "role": "tool", "tool_call_id": l.id, "content": resultado }),
+                        );
                     }
                 }
                 TurnoAgente::Texto(texto) => {
@@ -87,7 +92,11 @@ impl Agente {
             }
         }
 
-        writeln!(stdout, "\n[Agente] Se alcanzó el máximo de pasos sin conclusión.").ok();
+        writeln!(
+            stdout,
+            "\n[Agente] Se alcanzó el máximo de pasos sin conclusión."
+        )
+        .ok();
         Ok(())
     }
 

@@ -43,14 +43,16 @@ pub fn slug(tema: &str) -> String {
     resultado
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn slug_separa_palabras_con_guiones() {
-        assert_eq!(slug("Conflictividad en Mar del Plata"), "conflictividad-en-mar-del-plata");
+        assert_eq!(
+            slug("Conflictividad en Mar del Plata"),
+            "conflictividad-en-mar-del-plata"
+        );
     }
 
     #[test]

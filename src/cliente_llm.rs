@@ -85,7 +85,11 @@ impl ClienteLlmOpenRouter {
                     let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
                     let argumentos: Value =
                         serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
-                    Some(Llamada { id, nombre, argumentos })
+                    Some(Llamada {
+                        id,
+                        nombre,
+                        argumentos,
+                    })
                 })
                 .collect();
             if !llamadas.is_empty() {

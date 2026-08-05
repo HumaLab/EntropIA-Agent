@@ -48,13 +48,9 @@ fn main() {
 
     let modelo = modelo_activo();
     let cliente = ClienteLlmOpenRouter::new(key.clone(), modelo.clone());
-    let recuperador = match &repo_sqlite {
-        Some(_) => Some(Recuperador::new(
-            ClienteEmbeddings::new(key.clone()),
-            ClienteRerank::new(key),
-        )),
-        None => None,
-    };
+    let recuperador = repo_sqlite
+        .as_ref()
+        .map(|_| Recuperador::new(ClienteEmbeddings::new(key.clone()), ClienteRerank::new(key)));
 
     writeln!(
         &mut stdout,
@@ -116,8 +112,8 @@ fn abrir_repositorio() -> (Option<RepositorioSqlite>, Option<String>) {
 fn describir_modo_db(repo: &Option<RepositorioSqlite>, path: &Option<String>) -> String {
     match (repo, path) {
         (Some(_), Some(p)) => format!("SQLite · {p} · RAG (embeddings + FTS5 + rerank)"),
-        (_, Some(p)) => format!("Mock · no se pudo abrir la base: {p}"),
-        _ => "Mock · definí ENTROPIA_DB_PATH para usar la base de la app".to_string(),
+        (_, Some(p)) => format!("Sin fuentes · no se pudo abrir la base: {p}"),
+        _ => "Sin fuentes · definí ENTROPIA_DB_PATH para usar la base de la app".to_string(),
     }
 }
 

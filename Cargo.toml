@@ -2,7 +2,7 @@
 name = "entropia-agent"
 version = "0.1.0"
 edition = "2021"
-description = "PoC del motor de investigación historiográfica basado en la arquitectura de ZeroClaw"
+description = "Motor de investigación historiográfica sobre el corpus de EntropIA"
 license = "MIT"
 
 [dependencies]
