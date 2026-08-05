@@ -11,6 +11,7 @@ use std::path::Path;
 use entropia_agent::agente::Agente;
 use entropia_agent::cliente_llm::ClienteLlmOpenRouter;
 use entropia_agent::embeddings::ClienteEmbeddings;
+use entropia_agent::estado::EstadoDb;
 use entropia_agent::recuperacion::Recuperador;
 use entropia_agent::repositorio::RepositorioSqlite;
 use entropia_agent::rerank::ClienteRerank;
@@ -55,7 +56,26 @@ fn main() {
     )
     .unwrap();
 
+    // Estado persistente del agente (estado.sqlite, Fase 1): ledger epistémico
+    // y memoria longitudinal para las herramientas del Modo 1.
+    let estado_path =
+        std::env::var("ENTROPIA_STATE_PATH").unwrap_or_else(|_| "estado.sqlite".to_string());
+    let estado = EstadoDb::abrir(&estado_path);
+    writeln!(
+        &mut stdout,
+        "[Estado] {}",
+        match &estado {
+            Ok(db) => format!("SQLite · {estado_path} · esquema v{}", db.version_esquema()),
+            Err(e) => format!("no disponible: {e}"),
+        }
+    )
+    .unwrap();
+
     let agente = Agente::new(cliente, recuperador, repo_sqlite);
+    let agente = match estado {
+        Ok(db) => agente.con_estado(db),
+        Err(_) => agente,
+    };
 
     loop {
         let pedido = leer_linea(

@@ -1,0 +1,114 @@
+{
+  "banco": "entropia-bench-v1",
+  "descripcion": "Banco inicial de preguntas ancladas al corpus SOIP (PLAN, transversal). Solo se anclan items con chunks: preguntar por material no procesado mide la brecha de Lite/Pro, no al agente.",
+  "preguntas": [
+    {
+      "id": "soip-001",
+      "nivel": 1,
+      "tipo": "fecha",
+      "pregunta": "¿Qué fecha documental codifica el título «65-04-20» de la colección Conflicto SOIP 1965-66?",
+      "items_esperados": ["d8294082-5952-481e-bc42-2cfe953ce712"],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "1965-04-20"
+    },
+    {
+      "id": "soip-002",
+      "nivel": 1,
+      "tipo": "fecha",
+      "pregunta": "¿Qué fecha documental codifica el título «65-03-03» de la colección Conflicto SOIP 1965-66?",
+      "items_esperados": ["4991ceff-3dbf-4aad-8fb2-71eb140f0908"],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "1965-03-03"
+    },
+    {
+      "id": "soip-003",
+      "nivel": 1,
+      "tipo": "cobertura",
+      "pregunta": "¿Cuántos items de la colección «Conflicto SOIP 1965-66» no tienen ningún chunk procesado?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "136 de 148 (un 92 %): el informe debe declarar la brecha de cobertura."
+    },
+    {
+      "id": "soip-004",
+      "nivel": 1,
+      "tipo": "colecciones",
+      "pregunta": "¿Qué colecciones de prueba quedan excluidas de la recuperación y de los listados?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "stress222, stress-test-01, validacioneventos2222, nuevo proyecto, probar2 y prueba3."
+    },
+    {
+      "id": "soip-005",
+      "nivel": 2,
+      "tipo": "contenido",
+      "pregunta": "Según el item titulado «65-04-20» (Conflicto SOIP 1965-66), ¿qué ley se menciona en la carta de lectores y cómo se la califica?",
+      "items_esperados": ["d8294082-5952-481e-bc42-2cfe953ce712"],
+      "chunk_ids_esperados": ["ragchk-e0ce218677d08dc3cace2d9c09e708a49ab505755768e2073331526accd26447"],
+      "respuesta_referencia": "La Ley de Asociaciones Profesionales, calificada como «ley fascista»."
+    },
+    {
+      "id": "soip-006",
+      "nivel": 2,
+      "tipo": "contenido",
+      "pregunta": "Según el item «65-03-03» (Conflicto SOIP 1965-66), ¿qué organismo convocó a un plenario y en qué ciudad?",
+      "items_esperados": ["4991ceff-3dbf-4aad-8fb2-71eb140f0908"],
+      "chunk_ids_esperados": ["ragchk-540ab519fc43d2d427b8a235618af77a9d8199d2727a1387dac17265d5a6f1cf"],
+      "respuesta_referencia": "El Secretariado de la Confederación General del Trabajo Regional Mar del Plata."
+    },
+    {
+      "id": "soip-007",
+      "nivel": 2,
+      "tipo": "entidades",
+      "pregunta": "¿Qué organización aparece como sujeto de la denuncia registrada en el triple «el Sindicato Obrero de la Industria del Pescado denuncia…»?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "El Sindicato Obrero de la Industria del Pescado (SOIP)."
+    },
+    {
+      "id": "soip-008",
+      "nivel": 2,
+      "tipo": "fechas_mencionadas",
+      "pregunta": "Del texto del item «65-04-20», ¿qué fecha mencionada (timeline) puede extraerse y con qué precisión?",
+      "items_esperados": ["d8294082-5952-481e-bc42-2cfe953ce712"],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "Depende del contenido: el agente debe extraer las fechas mencionadas como claims temporales, no confundirlas con la fecha del documento."
+    },
+    {
+      "id": "soip-009",
+      "nivel": 3,
+      "tipo": "interpretacion",
+      "pregunta": "¿Qué limitación de cobertura debe declarar un informe sobre el Conflicto SOIP 1965-66 y por qué eso condiciona sus conclusiones?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "136 de 148 items sin procesar: un informe que no declara la brecha es engañoso aunque cada afirmación esté verificada (PLAN §6.5)."
+    },
+    {
+      "id": "soip-010",
+      "nivel": 3,
+      "tipo": "verificacion",
+      "pregunta": "Si una afirmación cita una frase que no aparece en el texto del chunk citado, ¿qué estado epistémico debe asignar el Verificador y con qué error_kind?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "unverifiable, con error_kind = ref_conflict (la cita no coincide con la fuente)."
+    },
+    {
+      "id": "soip-011",
+      "nivel": 3,
+      "tipo": "atribucion",
+      "pregunta": "Dado un informe sobre el conflicto de 1965-66, ¿cómo se reconstruye la cadena afirmación → evidencia → fuente para cada afirmación?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "Vía ClaimEvidence (claim_id → evidence_id → source_id), con el source.kind = entropia_chunk y el chunk_id del corpus."
+    },
+    {
+      "id": "soip-012",
+      "nivel": 3,
+      "tipo": "memoria",
+      "pregunta": "Si un hallazgo nuevo contradice uno previo de la memoria longitudinal, ¿qué debe pasar en lugar de sobrescribirlo?",
+      "items_esperados": [],
+      "chunk_ids_esperados": [],
+      "respuesta_referencia": "Se superficie una relación pendiente de juicio (conflicts_with) y el juez —historiador o agente— la resuelve."
+    }
+  ]
+}

@@ -11,16 +11,29 @@
 //! Fase 1.
 
 pub mod agente;
+pub mod bench;
 pub mod cliente_llm;
 pub mod configuracion;
+pub mod dominio;
 pub mod embeddings;
 pub mod estado;
+pub mod fechas;
 pub mod grafo;
 pub mod informe;
+pub mod informe_secciones;
 pub mod memoria;
+pub mod orquestador;
 pub mod prompts;
+pub mod puerta_lectura;
 pub mod recuperacion;
 pub mod repositorio;
 pub mod rerank;
+pub mod trabajador;
 pub mod trabajos;
 pub mod vector;
+pub mod verificador;
+
+#[cfg(test)]
+pub mod llm_fake;
+#[cfg(test)]
+pub mod tests_comunes;

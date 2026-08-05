@@ -14,7 +14,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 /// Versión de esquema actual del estado del agente.
-pub const VERSION_ESQUEMA: i64 = 1;
+pub const VERSION_ESQUEMA: i64 = 2;
 
 /// Migraciones incrementales: índice i → versión i+1.
 ///
@@ -163,6 +163,88 @@ CREATE TABLE memory_relations (
 );
 CREATE INDEX idx_memory_relations_source ON memory_relations(source_id);
 "#,
+    // Migración 2 — Fase 2: ledger epistémico (PLAN §7.1). Estas tablas nacen
+    // ahora con su primer escritor (orquestador/workers/verificador).
+    r#"
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('entropia_chunk','agent_report','zotero','external')),
+  external_id TEXT,
+  item_id TEXT,
+  asset_id TEXT,
+  chunk_id TEXT,
+  locator TEXT,
+  project TEXT NOT NULL,
+  corpus TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_sources_kind_external ON sources(kind, external_id) WHERE external_id IS NOT NULL;
+
+CREATE TABLE evidence (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  quote TEXT NOT NULL,
+  span_start INTEGER NOT NULL,
+  span_end INTEGER NOT NULL,
+  text_hash TEXT,
+  quote_normalized_hash TEXT,
+  locator TEXT,
+  confianza REAL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_evidence_source ON evidence(source_id);
+
+CREATE TABLE claims (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id),
+  type TEXT NOT NULL CHECK(type IN ('factual','interpretive','causal','synthetic')),
+  texto TEXT NOT NULL,
+  status TEXT CHECK(status IN ('supported','partially_supported','contradicted','unverifiable')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_claims_job ON claims(job_id);
+
+CREATE TABLE claim_evidence (
+  id TEXT PRIMARY KEY,
+  claim_id TEXT NOT NULL REFERENCES claims(id),
+  evidence_id TEXT NOT NULL REFERENCES evidence(id),
+  relation TEXT NOT NULL CHECK(relation IN ('supports','contradicts','contextualizes','qualifies')),
+  support_strength REAL,
+  UNIQUE (claim_id, evidence_id, relation)
+);
+
+CREATE TABLE verification_runs (
+  id TEXT PRIMARY KEY,
+  claim_id TEXT NOT NULL REFERENCES claims(id),
+  estado TEXT NOT NULL CHECK(estado IN ('supported','partially_supported','contradicted','unverifiable')),
+  modelo TEXT,
+  prompt_hash TEXT,
+  evidencia_considerada TEXT,
+  contraevidencia TEXT,
+  rationale TEXT,
+  error_kind TEXT,
+  timestamp INTEGER NOT NULL,
+  aceptado INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_verification_runs_claim ON verification_runs(claim_id, timestamp);
+
+CREATE TABLE memory_evidence (
+  id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL REFERENCES memories(id),
+  evidence_id TEXT NOT NULL REFERENCES evidence(id),
+  relation TEXT CHECK(relation IN ('supports','contextualizes','qualifies'))
+);
+
+CREATE TABLE source_temporal_metadata (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES sources(id),
+  date TEXT,
+  precision TEXT CHECK(precision IN ('day','month','year','none')),
+  confidence REAL,
+  derivation TEXT
+);
+"#,
 ];
 
 /// Base de estado del agente (escritura).
@@ -283,9 +365,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn la_base_nueva_aplica_la_migracion_1() {
+    fn la_base_nueva_aplica_las_migraciones() {
         let db = EstadoDb::abrir_en_memoria().unwrap();
-        assert_eq!(db.version_esquema(), 1);
+        assert_eq!(db.version_esquema(), 2);
     }
 
     #[test]
@@ -296,10 +378,10 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let db = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db.version_esquema(), 1);
+        assert_eq!(db.version_esquema(), 2);
         drop(db);
         let db2 = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db2.version_esquema(), 1);
+        assert_eq!(db2.version_esquema(), 2);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -336,11 +418,19 @@ mod tests {
                 "falta la tabla {tabla}"
             );
         }
-        // Las tablas epistémicas NO existen todavía (nacen en Fase 2).
-        for tabla in ["sources", "evidence", "claims", "verification_runs"] {
+        // Las tablas epistémicas nacen en la migración 2 (Fase 2).
+        for tabla in [
+            "sources",
+            "evidence",
+            "claims",
+            "claim_evidence",
+            "verification_runs",
+            "memory_evidence",
+            "source_temporal_metadata",
+        ] {
             assert!(
-                !tablas.contains(&tabla.to_string()),
-                "{tabla} no debería existir aún"
+                tablas.contains(&tabla.to_string()),
+                "falta la tabla {tabla}"
             );
         }
     }

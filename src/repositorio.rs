@@ -87,6 +87,16 @@ impl RepositorioSqlite {
         &self.denylist
     }
 
+    /// Cláusula `c.name NOT IN (?, …)` con sus parámetros (uso del gateway).
+    pub fn clausula_no_excluidas_pub(&self) -> (String, Vec<String>) {
+        self.clausula_no_excluidas()
+    }
+
+    /// Prepara una consulta sobre la conexión read-only (uso del gateway).
+    pub fn prepare_pub(&self, sql: &str) -> Result<rusqlite::Statement<'_>, rusqlite::Error> {
+        self.conn.prepare(sql)
+    }
+
     /// Cláusula `c.name NOT IN (?, …)` con sus parámetros.
     fn clausula_no_excluidas(&self) -> (String, Vec<String>) {
         let placeholders = std::iter::repeat_n("?", self.denylist.len())

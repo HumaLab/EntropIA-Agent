@@ -114,3 +114,34 @@ pub struct Llamada {
     pub nombre: String,
     pub argumentos: Value,
 }
+
+/// Abstracción del cliente LLM para composiciones de rol (PLAN §5): cada rol
+/// (orquestador, worker, verificador) es un prompt de sistema + un set de
+/// herramientas + un tope de pasos sobre el mismo cliente. Los tests usan un
+/// doble que responde guiones; producción usa `ClienteLlmOpenRouter`.
+pub trait ClienteLlm {
+    /// Un turno del rol: recibe el historial y las definiciones de
+    /// herramientas; devuelve texto final o llamadas a herramientas.
+    fn turno_agente(
+        &self,
+        mensajes: &[Value],
+        herramientas: &[Value],
+    ) -> Result<TurnoAgente, String>;
+
+    /// Modelo activo (para el snapshot de reproducibilidad del job).
+    fn modelo(&self) -> &str;
+}
+
+impl ClienteLlm for ClienteLlmOpenRouter {
+    fn turno_agente(
+        &self,
+        mensajes: &[Value],
+        herramientas: &[Value],
+    ) -> Result<TurnoAgente, String> {
+        ClienteLlmOpenRouter::turno_agente(self, mensajes, herramientas)
+    }
+
+    fn modelo(&self) -> &str {
+        &self.model
+    }
+}
