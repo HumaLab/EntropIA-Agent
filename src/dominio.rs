@@ -756,10 +756,21 @@ impl<'a> Ledger<'a> {
     ) -> Result<String, String> {
         let id = nuevo_id("sv");
         let content_hash = format!("{:016x}", crate::repositorio::fnv1a_64(metadata.as_bytes()));
-        // Milisegundos: dos versiones en el mismo segundo no colisionan en el
-        // UNIQUE (source_id, retrieved_at).
-        let retrieved_at =
-            time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
+        // Monotónico por fuente: dos versiones consecutivas nunca colisionan en
+        // el UNIQUE(source_id, retrieved_at), aunque el reloj no avance entre
+        // llamadas (precisión de ms o menos). `retrieved_at` = max(ahora,
+        // última versión + 1).
+        let ahora_ms = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
+        let ultimo: i64 = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT COALESCE(MAX(retrieved_at), 0) FROM source_versions WHERE source_id = ?1",
+                params![source_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let retrieved_at = ahora_ms.max(ultimo + 1);
         self.db
             .conn()
             .execute(
@@ -1200,5 +1211,45 @@ mod tests {
             .unwrap();
         assert_eq!(l.estado_epistemico(&claim), None);
         assert!(l.verificacion_vigente(&claim).is_none());
+    }
+
+    #[test]
+    fn las_versiones_consecutivas_de_una_fuente_nunca_colisionan() {
+        let db = EstadoDb::abrir_en_memoria().unwrap();
+        let l = Ledger::nuevo(&db);
+        let src = l
+            .registrar_fuente(
+                ClaseFuente::Zotero,
+                Some("z-mono"),
+                None,
+                None,
+                None,
+                None,
+                "p",
+                "c",
+            )
+            .unwrap();
+        // Varias versiones en bucle cerrado (mismo milisegundo): el bump
+        // monotónico garantiza retrieved_at estrictamente creciente y ningún
+        // UNIQUE(source_id, retrieved_at) falla.
+        for i in 0..50 {
+            l.registrar_version_fuente(&src, &format!("{{\"v\":{i}}}"), Some("texto"))
+                .unwrap();
+        }
+        let timestamps: Vec<i64> = db
+            .conn()
+            .prepare(
+                "SELECT retrieved_at FROM source_versions WHERE source_id = ?1 ORDER BY retrieved_at",
+            )
+            .unwrap()
+            .query_map(params![src], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(timestamps.len(), 50);
+        assert!(
+            timestamps.windows(2).all(|w| w[0] < w[1]),
+            "retrieved_at debe ser estrictamente creciente: {timestamps:?}"
+        );
     }
 }
