@@ -4,9 +4,14 @@
 //! El agente recibe el pedido del investigador y decide sus pasos con
 //! tool-calling: entrevista, busca fuentes en la base (RAG), lee fragmentos,
 //! redacta y guarda el informe.
+//!
+//! Fase 0 (PLAN §9): sin base de datos configurada el proceso **aborta con
+//! código de salida no nulo** en lugar de entrar al loop de pedidos: un informe
+//! sin fuentes sería engañoso.
 
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::process::ExitCode;
 
 use entropia_agent::agente::Agente;
 use entropia_agent::cliente_llm::ClienteLlmOpenRouter;
@@ -16,16 +21,33 @@ use entropia_agent::recuperacion::Recuperador;
 use entropia_agent::repositorio::RepositorioSqlite;
 use entropia_agent::rerank::ClienteRerank;
 
-fn main() {
+fn main() -> ExitCode {
     let _ = dotenvy::from_path(".env").ok();
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
+    let (repo_sqlite, db_path) = abrir_repositorio();
+
+    // Sin base de datos el agente aborta (Fase 0): primero el corpus, luego la
+    // API key, para que la falta de fuentes nunca se disfrace de sesión válida.
+    if repo_sqlite.is_none() {
+        let detalle = db_path
+            .map(|p| format!("no se pudo abrir la base en: {p}"))
+            .unwrap_or_else(|| "no está definida".to_string());
+        writeln!(
+            &mut stdout,
+            "\n[Error] No hay base de datos conectada: ENTROPIA_DB_PATH {detalle}.\n\
+             El agente no produce informes sin fuentes: definí ENTROPIA_DB_PATH \
+             apuntando a la base de la app y volvé a ejecutar."
+        )
+        .unwrap();
+        return ExitCode::from(1);
+    }
+
     let api_key: Option<String> = std::env::var("OPENROUTER_API_KEY")
         .ok()
         .filter(|k| !k.trim().is_empty());
-    let (repo_sqlite, db_path) = abrir_repositorio();
 
     imprimir_bienvenida(&mut stdout);
 
@@ -35,7 +57,7 @@ fn main() {
             "\nEl agente autónomo requiere OPENROUTER_API_KEY. Definila y volvé a ejecutar."
         )
         .unwrap();
-        return;
+        return ExitCode::from(1);
     };
 
     let modelo = modelo_activo();
@@ -90,7 +112,7 @@ fn main() {
                 "\nFin de la sesión. Gracias por usar el motor de EntropIA."
             )
             .unwrap();
-            break;
+            return ExitCode::SUCCESS;
         }
         if let Err(e) = agente.ejecutar(&pedido, &mut stdout, &stdin) {
             writeln!(&mut stdout, "\n[Agente] Error: {e}").unwrap();
@@ -107,12 +129,20 @@ fn modelo_activo() -> String {
 }
 
 /// Abre la base común indicada por `ENTROPIA_DB_PATH`.
+///
+/// Devuelve también la ruta configurada (aunque el archivo no exista) para que
+/// el aborto sin base explique si la variable no está definida o si la ruta no
+/// se pudo abrir.
 fn abrir_repositorio() -> (Option<RepositorioSqlite>, Option<String>) {
     match std::env::var("ENTROPIA_DB_PATH") {
-        Ok(path) if !path.trim().is_empty() && Path::new(&path).exists() => {
-            match RepositorioSqlite::abrir(&path) {
-                Ok(repo) => (Some(repo), Some(path)),
-                Err(_) => (None, Some(path)),
+        Ok(path) if !path.trim().is_empty() => {
+            if !Path::new(&path).exists() {
+                (None, Some(path))
+            } else {
+                match RepositorioSqlite::abrir(&path) {
+                    Ok(repo) => (Some(repo), Some(path)),
+                    Err(_) => (None, Some(path)),
+                }
             }
         }
         _ => (None, None),
