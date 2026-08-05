@@ -2,8 +2,14 @@
 //!
 //! Expone la carga de chunks con embeddings, la búsqueda léxica FTS5 y la
 //! lectura de fragmentos y colecciones para el agente.
+//!
+//! Fase 0 (PLAN §6.5): todas las consultas excluyen la denylist de colecciones
+//! de prueba (`configuracion::COLECCIONES_EXCLUIDAS`) y reportan la cobertura
+//! del recorte consultado (items totales / con chunks / sin procesar).
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, ToSql};
+
+use crate::configuracion::colecciones_excluidas;
 
 /// Una fuente documental (fragmento) con su texto, para el agente.
 #[derive(Debug, Clone)]
@@ -23,32 +29,91 @@ pub struct ChunkRag {
     pub embedding: Vec<f32>,
 }
 
+/// Información de cobertura de una colección.
+#[derive(Debug, Clone)]
+pub struct ColeccionInfo {
+    pub id: String,
+    pub nombre: String,
+    pub items: i64,
+    pub items_con_chunks: i64,
+    pub chunks: i64,
+}
+
+impl ColeccionInfo {
+    /// Items de la colección sin ningún chunk procesado.
+    pub fn items_sin_procesar(&self) -> i64 {
+        self.items - self.items_con_chunks
+    }
+}
+
+/// Cobertura del recorte consultado (PLAN §6.5).
+///
+/// Todo informe abre con esta tabla: con 255 de ~418 items reales sin chunks,
+/// un informe que no declara la cobertura es engañoso aunque cada afirmación
+/// esté verificada.
+#[derive(Debug, Clone)]
+pub struct Cobertura {
+    pub items_total: i64,
+    pub items_con_chunks: i64,
+    pub items_sin_procesar: i64,
+    pub colecciones: Vec<ColeccionInfo>,
+}
+
 /// Repositorio SQLite sobre la base común de la app EntropIA.
 ///
 /// Se abre en modo solo lectura para no interferir con la base activa de la
-/// aplicación.
+/// aplicación. Lleva la denylist de colecciones de prueba como estado de
+/// instancia: todas las consultas la aplican de forma consistente.
 pub struct RepositorioSqlite {
     conn: Connection,
+    denylist: Vec<String>,
 }
 
 impl RepositorioSqlite {
-    /// Abre la base en modo solo lectura.
+    /// Abre la base en modo solo lectura con la denylist por defecto.
     pub fn abrir(path: &str) -> Result<Self, String> {
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY;
-        let conn = Connection::open_with_flags(path, flags).map_err(|e| e.to_string())?;
-        Ok(Self { conn })
+        Self::abrir_con_denylist(path, colecciones_excluidas())
     }
 
-    /// Carga todos los chunks con su embedding y metadatos.
+    /// Abre la base con una denylist explícita (para tests y configuración).
+    pub fn abrir_con_denylist(path: &str, denylist: Vec<String>) -> Result<Self, String> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY;
+        let conn = Connection::open_with_flags(path, flags).map_err(|e| e.to_string())?;
+        Ok(Self { conn, denylist })
+    }
+
+    /// La denylist vigente (para el snapshot de reproducibilidad del job).
+    pub fn denylist(&self) -> &[String] {
+        &self.denylist
+    }
+
+    /// Cláusula `c.name NOT IN (?, …)` con sus parámetros.
+    fn clausula_no_excluidas(&self) -> (String, Vec<String>) {
+        let placeholders = std::iter::repeat_n("?", self.denylist.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        (
+            format!("c.name NOT IN ({placeholders})"),
+            self.denylist.clone(),
+        )
+    }
+
+    /// Carga los chunks con su embedding y metadatos, excluyendo las
+    /// colecciones de la denylist.
     pub fn cargar_chunks(&self) -> Result<Vec<ChunkRag>, String> {
-        const SQL: &str = "\
+        let (clausula, nombres) = self.clausula_no_excluidas();
+        let sql = format!(
+            "\
 SELECT rc.id, rc.text_content, rc.embedding, i.title, COALESCE(c.name, '') \
 FROM rag_chunks rc \
 LEFT JOIN items i ON i.id = rc.item_id \
-LEFT JOIN collections c ON c.id = i.collection_id";
-        let mut stmt = self.conn.prepare(SQL).map_err(|e| e.to_string())?;
+LEFT JOIN collections c ON c.id = i.collection_id \
+WHERE {clausula}"
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let parametros: Vec<&dyn ToSql> = nombres.iter().map(|n| n as &dyn ToSql).collect();
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(params_from_iter(parametros), |row| {
                 let blob: Vec<u8> = row.get(2)?;
                 Ok(ChunkRag {
                     id: row.get(0)?,
@@ -62,19 +127,35 @@ LEFT JOIN collections c ON c.id = i.collection_id";
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    /// Busca identificadores de chunks por texto con FTS5 (BM25).
+    /// Busca identificadores de chunks por texto con FTS5 (BM25), excluyendo
+    /// las colecciones de la denylist.
     pub fn buscar_fts5(&self, consulta: &str, limite: usize) -> Vec<String> {
         let q = fts5_query(consulta);
         if q.is_empty() {
             return Vec::new();
         }
+        let (clausula, nombres) = self.clausula_no_excluidas();
+        // ?1 es la consulta MATCH; los `?` de la denylist son ?2..?N+1; el
+        // LIMIT lleva el número explícito siguiente para no colisionar.
         let sql = format!(
-            "SELECT chunk_id FROM rag_chunks_fts WHERE text_content MATCH ?1 ORDER BY bm25(rag_chunks_fts) LIMIT {limite}"
+            "\
+SELECT f.chunk_id \
+FROM rag_chunks_fts f \
+JOIN rag_chunks rc ON rc.id = f.chunk_id \
+JOIN items i ON i.id = rc.item_id \
+JOIN collections c ON c.id = i.collection_id \
+WHERE f.text_content MATCH ?1 AND {clausula} \
+ORDER BY bm25(rag_chunks_fts) LIMIT ?{}",
+            nombres.len() + 2
         );
         let Ok(mut stmt) = self.conn.prepare(&sql) else {
             return Vec::new();
         };
-        let rows = stmt.query_map(params![q], |row| row.get::<_, String>(0));
+        let mut parametros: Vec<&dyn ToSql> = Vec::with_capacity(nombres.len() + 2);
+        parametros.push(&q);
+        parametros.extend(nombres.iter().map(|n| n as &dyn ToSql));
+        parametros.push(&limite);
+        let rows = stmt.query_map(params_from_iter(parametros), |row| row.get::<_, String>(0));
         let Ok(iter) = rows else {
             return Vec::new();
         };
@@ -95,35 +176,124 @@ LEFT JOIN collections c ON c.id = i.collection_id";
         rows.next().and_then(|r| r.ok())
     }
 
-    /// Lista las colecciones con la cantidad de documentos (top 20).
-    pub fn listar_colecciones(&self) -> Vec<(String, i64)> {
+    /// Nombre de la colección a la que pertenece un chunk (trazabilidad
+    /// afirmación → evidencia → fuente).
+    pub fn coleccion_de_chunk(&self, chunk_id: &str) -> Option<String> {
         let Ok(mut stmt) = self.conn.prepare(
-            "SELECT c.name, COUNT(i.id) FROM collections c \
-             LEFT JOIN items i ON i.collection_id = c.id \
-             GROUP BY c.name ORDER BY 2 DESC LIMIT 20",
+            "SELECT c.name FROM rag_chunks rc \
+             JOIN items i ON i.id = rc.item_id \
+             JOIN collections c ON c.id = i.collection_id \
+             WHERE rc.id = ?1",
         ) else {
+            return None;
+        };
+        let Ok(mut rows) = stmt.query_map(params![chunk_id], |row| row.get::<_, String>(0)) else {
+            return None;
+        };
+        rows.next().and_then(|r| r.ok())
+    }
+
+    /// Lista las colecciones reales (fuera de la denylist) con su cobertura:
+    /// items, items con chunks y chunks.
+    pub fn listar_colecciones(&self) -> Vec<ColeccionInfo> {
+        let (clausula, nombres) = self.clausula_no_excluidas();
+        let sql = format!(
+            "\
+SELECT c.id, c.name, \
+       COUNT(DISTINCT i.id) AS items, \
+       COUNT(DISTINCT CASE WHEN rc.id IS NOT NULL THEN i.id END) AS items_con_chunks, \
+       COUNT(rc.id) AS chunks \
+FROM collections c \
+LEFT JOIN items i ON i.collection_id = c.id \
+LEFT JOIN rag_chunks rc ON rc.item_id = i.id \
+WHERE {clausula} \
+GROUP BY c.id, c.name \
+ORDER BY items DESC"
+        );
+        let Ok(mut stmt) = self.conn.prepare(&sql) else {
             return Vec::new();
         };
-        let Ok(rows) = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        let parametros: Vec<&dyn ToSql> = nombres.iter().map(|n| n as &dyn ToSql).collect();
+        let Ok(rows) = stmt.query_map(params_from_iter(parametros), |row| {
+            Ok(ColeccionInfo {
+                id: row.get(0)?,
+                nombre: row.get(1)?,
+                items: row.get(2)?,
+                items_con_chunks: row.get(3)?,
+                chunks: row.get(4)?,
+            })
         }) else {
             return Vec::new();
         };
         rows.filter_map(|r| r.ok()).collect()
     }
+
+    /// Cobertura agregada del recorte consultado (PLAN §6.5): todo informe
+    /// abre con esta tabla.
+    pub fn cobertura(&self) -> Cobertura {
+        let (clausula, nombres) = self.clausula_no_excluidas();
+        // COUNT(DISTINCT): un item con varios chunks no debe duplicarse.
+        let sql_total = format!(
+            "SELECT COUNT(DISTINCT i.id) FROM items i JOIN collections c ON c.id = i.collection_id \
+             WHERE {clausula}"
+        );
+        let sql_con_chunks = format!(
+            "SELECT COUNT(DISTINCT i.id) FROM items i \
+             JOIN collections c ON c.id = i.collection_id \
+             JOIN rag_chunks rc ON rc.item_id = i.id \
+             WHERE {clausula}"
+        );
+        let parametros: Vec<&dyn ToSql> = nombres.iter().map(|n| n as &dyn ToSql).collect();
+
+        let total = self
+            .conn
+            .prepare(&sql_total)
+            .and_then(|mut stmt| {
+                stmt.query_row(params_from_iter(parametros.iter().copied()), |r| {
+                    r.get::<_, i64>(0)
+                })
+            })
+            .unwrap_or(0);
+        let con_chunks = self
+            .conn
+            .prepare(&sql_con_chunks)
+            .and_then(|mut stmt| {
+                stmt.query_row(params_from_iter(parametros.iter().copied()), |r| {
+                    r.get::<_, i64>(0)
+                })
+            })
+            .unwrap_or(0);
+        let colecciones = self.listar_colecciones();
+        Cobertura {
+            items_total: total,
+            items_con_chunks: con_chunks,
+            items_sin_procesar: total - con_chunks,
+            colecciones,
+        }
+    }
 }
 
 /// Convierte un texto en una expresión FTS5 segura (tokens entre comillas,
 /// unidos con OR para maximizar la cobertura).
+///
+/// Fase 0 (PLAN §9): se conservan los tokens numéricos de 2 caracteres (p. ej.
+/// `65` y `17` en consultas por fecha `65-03-17`) que antes se descartaban.
 pub fn fts5_query(texto: &str) -> String {
     let tokens: Vec<String> = texto
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.chars().count() > 2)
+        .filter(|t| es_token_valido(t))
         .take(12)
         .map(|t| format!("\"{}\"", t.replace('"', "")))
         .collect();
     tokens.join(" OR ")
+}
+
+/// Un token es válido si tiene más de 2 caracteres, o si es numérico con al
+/// menos 2 (las fechas `65-03-17` no deben perderse en la consulta).
+fn es_token_valido(t: &str) -> bool {
+    let n = t.chars().count();
+    n > 2 || (n >= 2 && t.chars().all(|c| c.is_ascii_digit()))
 }
 
 #[cfg(test)]
@@ -136,8 +306,13 @@ mod tests {
     }
 
     #[test]
-    fn fts5_ignora_tokens_cortos() {
+    fn fts5_ignora_tokens_cortos_alfabeticos() {
         assert_eq!(fts5_query("la de y huelga"), "\"huelga\"");
+    }
+
+    #[test]
+    fn fts5_conserva_tokens_numericos_de_fecha() {
+        assert_eq!(fts5_query("65-03-17"), "\"65\" OR \"03\" OR \"17\"");
     }
 
     #[test]
@@ -159,5 +334,17 @@ mod tests {
         let q = fts5_query(&muchos);
         // 12 tokens producen 11 separadores " OR ".
         assert_eq!(q.matches(" OR ").count(), 11);
+    }
+
+    #[test]
+    fn coleccion_info_calcula_sin_procesar() {
+        let info = ColeccionInfo {
+            id: "a".into(),
+            nombre: "Conflicto SOIP 1965-66".into(),
+            items: 148,
+            items_con_chunks: 12,
+            chunks: 40,
+        };
+        assert_eq!(info.items_sin_procesar(), 136);
     }
 }

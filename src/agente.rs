@@ -4,8 +4,13 @@
 //! busca fuentes en la base (RAG), lee fragmentos, redacta y guarda el
 //! informe. El loop itera y llama a las herramientas hasta que el modelo emite su
 //! respuesta final.
+//!
+//! Fase 0 (PLAN §9): sin base de datos el agente **aborta con error** en vez de
+//! redactar un informe sin fuentes, y todo informe guardado abre con la tabla
+//! de cobertura del recorte consultado.
 
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 
 use serde_json::{json, Value};
 
@@ -39,12 +44,23 @@ impl Agente {
     }
 
     /// Ejecuta el agente con el pedido del investigador.
+    ///
+    /// Sin base conectada devuelve un error en vez de redactar: un informe sin
+    /// una sola fuente sería engañoso (PLAN §9, Fase 0).
     pub fn ejecutar<W: Write>(
         &self,
         pedido: &str,
         stdout: &mut W,
         stdin: &io::Stdin,
     ) -> Result<(), String> {
+        if self.repo.is_none() {
+            return Err(
+                "No hay base de datos conectada: definí ENTROPIA_DB_PATH para usar la base de la app. \
+                 Sin fuentes, el agente no produce informes."
+                    .to_string(),
+            );
+        }
+
         let mut mensajes: Vec<Value> = vec![
             json!({ "role": "system", "content": prompts::PROMPT_AGENTE }),
             json!({ "role": "user", "content": pedido }),
@@ -147,7 +163,15 @@ impl Agente {
                     let cols = repo.listar_colecciones();
                     let arr: Vec<Value> = cols
                         .iter()
-                        .map(|(nombre, cantidad)| json!({ "coleccion": nombre, "documentos": cantidad }))
+                        .map(|c| {
+                            json!({
+                                "coleccion": c.nombre,
+                                "items": c.items,
+                                "items_con_chunks": c.items_con_chunks,
+                                "items_sin_procesar": c.items_sin_procesar(),
+                                "chunks": c.chunks,
+                            })
+                        })
                         .collect();
                     serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into())
                 }
@@ -164,7 +188,14 @@ impl Agente {
             "guardar_informe" => {
                 let titulo = args["titulo"].as_str().unwrap_or("informe");
                 let texto = args["texto"].as_str().unwrap_or("");
-                match informe::guardar(titulo, texto) {
+                // Todo informe abre con la tabla de cobertura del recorte
+                // consultado (PLAN §6.5): sin ella, el informe es engañoso.
+                let cobertura = match &self.repo {
+                    Some(repo) => informe::tabla_cobertura(&repo.cobertura()),
+                    None => String::new(),
+                };
+                let completo = format!("{cobertura}{texto}");
+                match informe::guardar(Path::new("informes"), titulo, &completo) {
                     Ok(ruta) => format!("Informe guardado en: {}", ruta.display()),
                     Err(e) => format!("No se pudo guardar el informe: {e}"),
                 }
@@ -181,12 +212,12 @@ fn definiciones_herramientas() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "buscar_fuentes",
-                "description": "Busca fragmentos documentales en la base por una consulta (semántico más léxico con rerank). Devuelve los más relevantes con su texto.",
+                "description": "Busca fragmentos documentales en la base por una consulta (semántico más léxico con rerank). Devuelve los más relevantes con su texto. El límite se acota a 16 (profundidad del pipeline).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "consulta": { "type": "string", "description": "Consulta con términos propios del campo" },
-                        "limite": { "type": "integer", "description": "Cantidad máxima de fragmentos", "default": 6 }
+                        "limite": { "type": "integer", "description": "Cantidad máxima de fragmentos (máx. 16)", "default": 6 }
                     },
                     "required": ["consulta"]
                 }
@@ -208,7 +239,7 @@ fn definiciones_herramientas() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "listar_colecciones",
-                "description": "Lista las colecciones documentales de la base con su cantidad de documentos.",
+                "description": "Lista las colecciones documentales de la base (fuera de las de prueba) con su cobertura: items totales, items con chunks, items sin procesar y chunks. Es la herramienta de cobertura.",
                 "parameters": { "type": "object", "properties": {} }
             }
         }),
@@ -228,7 +259,7 @@ fn definiciones_herramientas() -> Vec<Value> {
             "type": "function",
             "function": {
                 "name": "guardar_informe",
-                "description": "Guarda el informe historiográfico en un archivo Markdown.",
+                "description": "Guarda el informe historiográfico en un archivo Markdown. El informe abre con la tabla de cobertura del recorte consultado.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -266,5 +297,18 @@ mod tests {
         for d in definiciones_herramientas() {
             assert_eq!(d["type"], "function");
         }
+    }
+
+    #[test]
+    fn sin_base_el_agente_aborta_con_error() {
+        let cliente = ClienteLlmOpenRouter::new("clave-de-prueba", "modelo-de-prueba");
+        let agente = Agente::new(cliente, None, None);
+        let mut salida = Vec::new();
+        let err = agente
+            .ejecutar("pedido de prueba", &mut salida, &io::stdin())
+            .unwrap_err();
+        assert!(err.contains("ENTROPIA_DB_PATH"));
+        // No llegó a llamar al modelo: sin mensajes de agente.
+        assert!(String::from_utf8_lossy(&salida).is_empty());
     }
 }

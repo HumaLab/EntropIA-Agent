@@ -4,8 +4,14 @@
 //! combina búsqueda semántica (coseno sobre embeddings BGE-M3) con búsqueda
 //! léxica (FTS5 con BM25), fusiona por Reciprocal Rank Fusion y reranquea con
 //! cohere/rerank-4-fast.
+//!
+//! Fase 0 (PLAN §9): los chunks se cargan **una vez por proceso** (antes
+//! `cargar_chunks()` movía 7,6 MB y 1.648 decodificaciones `Vec<f32>` en cada
+//! `buscar_fuentes`), y `limite` se acota explícitamente a `RERANK_DEPTH` en
+//! vez de topar en silencio.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::embeddings::ClienteEmbeddings;
 use crate::repositorio::{ChunkRag, Fuente, RepositorioSqlite};
@@ -21,35 +27,91 @@ const RRF_K: usize = 60;
 /// Tope de caracteres por fragmento.
 const SNIPPET_MAX: usize = 1600;
 
+/// Corpus cargado y su índice id → posición (ver `CacheChunks`).
+type CorpusCargado = (Arc<Vec<ChunkRag>>, Arc<HashMap<String, usize>>);
+
+/// Caché de chunks del proceso: carga el corpus una única vez y lo reutiliza
+/// entre consultas (PLAN §9, Fase 0). Los `Arc` hacen que cada consulta pague
+/// dos clonados de puntero, no 7,6 MB de copia.
+pub struct CacheChunks {
+    chunks: Option<Arc<Vec<ChunkRag>>>,
+    indice: Option<Arc<HashMap<String, usize>>>,
+}
+
+impl CacheChunks {
+    pub fn nueva() -> Self {
+        Self {
+            chunks: None,
+            indice: None,
+        }
+    }
+
+    /// Devuelve los chunks (y su índice), cargándolos con `cargar` solo la
+    /// primera vez. La carga ocurre bajo el mutex del `Recuperador`.
+    pub fn obtener_o_cargar(
+        &mut self,
+        repo: &RepositorioSqlite,
+        cargar: impl FnOnce(&RepositorioSqlite) -> Result<Vec<ChunkRag>, String>,
+    ) -> Result<CorpusCargado, String> {
+        if self.chunks.is_none() {
+            let chunks = cargar(repo)?;
+            let indice: HashMap<String, usize> = chunks
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.id.clone(), i))
+                .collect();
+            self.chunks = Some(Arc::new(chunks));
+            self.indice = Some(Arc::new(indice));
+        }
+        let chunks = self
+            .chunks
+            .clone()
+            .ok_or_else(|| "Sin chunks".to_string())?;
+        let indice = self
+            .indice
+            .clone()
+            .ok_or_else(|| "Sin índice".to_string())?;
+        Ok((chunks, indice))
+    }
+}
+
 /// Orquestador de recuperación híbrida.
 pub struct Recuperador {
     embeddings: ClienteEmbeddings,
     rerank: ClienteRerank,
+    cache: Mutex<CacheChunks>,
 }
 
 impl Recuperador {
     pub fn new(embeddings: ClienteEmbeddings, rerank: ClienteRerank) -> Self {
-        Self { embeddings, rerank }
+        Self {
+            embeddings,
+            rerank,
+            cache: Mutex::new(CacheChunks::nueva()),
+        }
     }
 
     /// Recupera los fragmentos más relevantes para una consulta del agente.
+    ///
+    /// El `limite` se acota a `RERANK_DEPTH` de forma explícita: es la
+    /// profundidad real del pipeline (candidatos que entran al rerank).
     pub fn recuperar_consulta(
         &self,
         repo: &RepositorioSqlite,
         consulta: &str,
         limite: usize,
     ) -> Vec<Fuente> {
-        let Ok(chunks) = repo.cargar_chunks() else {
-            return Vec::new();
+        let limite = limite.min(RERANK_DEPTH);
+        let (chunks, indice) = {
+            let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
+            match cache.obtener_o_cargar(repo, |r| r.cargar_chunks()) {
+                Ok(par) => par,
+                Err(_) => return Vec::new(),
+            }
         };
         if chunks.is_empty() {
             return Vec::new();
         }
-        let indice: HashMap<String, usize> = chunks
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (c.id.clone(), i))
-            .collect();
 
         let Some(q_emb) = self.embeddings.embed(consulta).ok() else {
             return Vec::new();
@@ -191,5 +253,28 @@ mod tests {
         assert_eq!(cerca.len(), 3);
         assert_eq!(cerca[0], 0);
         assert_eq!(cerca[1], 2);
+    }
+
+    #[test]
+    fn cache_carga_una_sola_vez_por_proceso() {
+        let mut cache = CacheChunks::nueva();
+        let llamadas = std::cell::Cell::new(0);
+        let cargar = |_repo: &RepositorioSqlite| {
+            llamadas.set(llamadas.get() + 1);
+            Ok(Vec::<ChunkRag>::new())
+        };
+        let repo = repo_fantasma();
+        let _ = cache.obtener_o_cargar(&repo, cargar);
+        let _ = cache.obtener_o_cargar(&repo, cargar);
+        assert_eq!(llamadas.get(), 1);
+    }
+
+    fn repo_fantasma() -> RepositorioSqlite {
+        // Base vacía en un archivo temporal: el cierre de carga no la consulta.
+        let path =
+            std::env::temp_dir().join(format!("entropia-cache-test-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _ = rusqlite::Connection::open(&path).unwrap();
+        RepositorioSqlite::abrir_con_denylist(path.to_str().unwrap(), vec![]).unwrap()
     }
 }

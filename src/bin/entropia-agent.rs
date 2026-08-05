@@ -1,28 +1,19 @@
-//! Punto de entrada: agente autónomo de investigación historiográfica.
+//! Punto de entrada (bin delgado sobre la lib): agente autónomo de
+//! investigación historiográfica.
 //!
 //! El agente recibe el pedido del investigador y decide sus pasos con
 //! tool-calling: entrevista, busca fuentes en la base (RAG), lee fragmentos,
 //! redacta y guarda el informe.
 
-mod agente;
-mod cliente_llm;
-mod embeddings;
-mod informe;
-mod prompts;
-mod recuperacion;
-mod repositorio;
-mod rerank;
-mod vector;
-
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-use agente::Agente;
-use cliente_llm::ClienteLlmOpenRouter;
-use embeddings::ClienteEmbeddings;
-use recuperacion::Recuperador;
-use repositorio::RepositorioSqlite;
-use rerank::ClienteRerank;
+use entropia_agent::agente::Agente;
+use entropia_agent::cliente_llm::ClienteLlmOpenRouter;
+use entropia_agent::embeddings::ClienteEmbeddings;
+use entropia_agent::recuperacion::Recuperador;
+use entropia_agent::repositorio::RepositorioSqlite;
+use entropia_agent::rerank::ClienteRerank;
 
 fn main() {
     let _ = dotenvy::from_path(".env").ok();
