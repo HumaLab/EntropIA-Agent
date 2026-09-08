@@ -1,196 +1,161 @@
-//! Job API pública (PLAN §2, Fase 4): el seam de integración con EntropIA
-//! Lite/Pro. Hoy la envuelve el CLI; mañana la envuelven commands Tauri con
-//! eventos de progreso (`research_start / research_step / research_pause /
-//! research_resume / research_status / research_events / research_artifacts`).
-//! No hay que rediseñar para integrar.
+//! Superficie de integración del motor de investigación (seam IPC).
 //!
-//! `estado.sqlite` es gestionado por el desktop (archivo separado en el dir de
-//! datos de la app, decisión §11#1): la frontera read-only se mantiene a nivel
-//! de archivo — el agente nunca abre el corpus para escribir.
+//! Toda operación devuelve el **snapshot estructurado** del job —`job`,
+//! `events`, `artifacts`, `gates`, `sources`— y no texto de presentación. El
+//! frontend no tiene que reinterpretar cadenas formateadas para saber qué pasó,
+//! ni reimplementar la máquina de estados en TypeScript: la única autoridad
+//! sobre las transiciones es `investigacion::procesar`.
+//!
+//! Los errores del backend viajan como `Err(String)` y no se disfrazan de
+//! éxito: un paso que falla deja el job en su estado real y lo dice.
 
 use std::path::PathBuf;
 
+use serde_json::{json, Value};
+
 use crate::cliente_llm::ClienteLlm;
 use crate::estado::EstadoDb;
-use crate::orquestador::MotorInvestigacion;
+use crate::investigacion;
+use crate::recuperacion::Recuperador;
 use crate::repositorio::RepositorioSqlite;
-use crate::trabajos::{EstadoJob, Job, MotivoCierre, MotorTrabajos};
 
-/// Progreso devuelto por `research_step`.
-#[derive(Debug, Clone)]
-pub struct ProgresoInvest {
-    pub job_id: String,
-    pub stage_ejecutado: Option<String>,
-    pub quedan_stages: bool,
-    pub terminado: bool,
-    pub informe_path: Option<String>,
-}
-
-/// Info de un artefacto del job (para la UI).
-#[derive(Debug, Clone)]
-pub struct ArtifactoJob {
-    pub id: String,
-    pub tipo: String,
-    pub path: String,
-    pub padre: Option<String>,
-    pub version: i64,
-}
-
-/// API de integración sobre el motor de investigación.
+/// API de integración sobre el workflow durable de investigación.
 pub struct ApiAgente<'a> {
     pub llm: &'a dyn ClienteLlm,
     pub repo: &'a RepositorioSqlite,
     pub db: &'a EstadoDb,
+    /// Recuperación híbrida (embeddings + léxica + rerank). En `None` el motor
+    /// busca solo por léxico y lo declara en el informe: es un modo degradado
+    /// legítimo —sin claves de API o sin red— nunca silencioso.
+    pub recuperador: Option<&'a Recuperador>,
     pub dir_artefactos: PathBuf,
 }
 
-impl<'a> ApiAgente<'a> {
-    fn inv(&self) -> MotorInvestigacion<'a> {
-        MotorInvestigacion {
-            llm: self.llm,
-            repo: self.repo,
-            recuperador: None,
-            motor: MotorTrabajos::nuevo(self.db),
-            ledger: crate::dominio::Ledger::nuevo(self.db),
-            memoria: crate::memoria::MemoriaDb::nuevo(self.db),
-            dir_artefactos: self.dir_artefactos.clone(),
-            db: self.db,
-        }
+impl ApiAgente<'_> {
+    fn op(&self, request: Value) -> Result<Value, String> {
+        investigacion::procesar(
+            self.db,
+            self.repo,
+            self.llm,
+            self.recuperador,
+            &self.dir_artefactos,
+            request,
+        )
     }
 
-    /// `research_start`: crea el job (snapshot congelado) y prepara el plan.
-    pub fn research_start(
+    /// `research_list`: investigaciones persistidas, colecciones disponibles y
+    /// modalidades de informe. Es lo que necesita la vista raíz.
+    pub fn research_list(&self) -> Result<Value, String> {
+        self.op(json!({"op": "list"}))
+    }
+
+    /// `research_create`: crea el job con su recorte y su presupuesto
+    /// congelados. `pedido` lleva `question`, `project`, `collection_ids`,
+    /// `max_llm_calls` y, opcionalmente, `max_cost`, `context` y `modalidad`.
+    pub fn research_create(&self, pedido: Value) -> Result<Value, String> {
+        let mut request = pedido;
+        request["op"] = json!("create");
+        self.op(request)
+    }
+
+    /// `research_get`: snapshot del job. La evidencia viene omitida por volumen;
+    /// para leer una fuente concreta está `research_source`.
+    pub fn research_get(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "get", "job_id": job_id}))
+    }
+
+    /// `research_step`: ejecuta la siguiente etapa autorizada. Las etapas de
+    /// volumen variable avanzan por lotes con checkpoint: un paso puede no
+    /// cambiar de fase y eso no es un error.
+    pub fn research_step(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "advance", "job_id": job_id}))
+    }
+
+    /// `research_answer`: responde la ronda de clarificación. `answers` es una
+    /// lista de `{id, text}`.
+    pub fn research_answer(&self, job_id: &str, answers: Value) -> Result<Value, String> {
+        self.op(json!({"op": "answer", "job_id": job_id, "answers": answers}))
+    }
+
+    /// `research_decision`: resuelve un gate humano pendiente.
+    pub fn research_decision(
         &self,
-        pedido: &str,
-        project: &str,
-        config_snapshot: &str,
+        job_id: &str,
+        gate_id: &str,
+        aprobar: bool,
+    ) -> Result<Value, String> {
+        self.op(json!({"op":"decision","job_id":job_id,"gate_id":gate_id,"approve":aprobar}))
+    }
+
+    /// `research_revise`: reemplaza el diseño o el plan. Invalida lo derivado y
+    /// lo declara; la evidencia y los juicios son registros inmutables.
+    pub fn research_revise(
+        &self,
+        job_id: &str,
+        artifact_id: &str,
+        contenido: Value,
+    ) -> Result<Value, String> {
+        self.op(
+            json!({"op":"revise","job_id":job_id,"artifact_id":artifact_id,"content":contenido}),
+        )
+    }
+
+    /// `research_budget`: ajusta el presupuesto sobre el trabajo ya hecho. No
+    /// puede quedar por debajo de lo consumido.
+    pub fn research_budget(
+        &self,
+        job_id: &str,
+        max_llm_calls: i64,
         max_cost: Option<f64>,
-        max_llm_calls: Option<i64>,
-    ) -> Result<String, String> {
-        let inv = self.inv();
-        let corpus_snapshot = self.repo.snapshot_corpus()?;
-        let job = inv.motor.crear_job(crate::trabajos::ConfigJob {
-            modo: "investigacion".into(),
-            pregunta: pedido.into(),
-            project: project.into(),
-            corpus: "soip".into(),
-            config_snapshot: config_snapshot.into(),
-            corpus_snapshot_id: Some(corpus_snapshot),
-            max_cost,
-            max_llm_calls,
-        })?;
-        inv.preparar_job(&job.id, pedido)?;
-        Ok(job.id)
+    ) -> Result<Value, String> {
+        self.op(
+            json!({"op":"update_budget","job_id":job_id,"max_llm_calls":max_llm_calls,"max_cost":max_cost}),
+        )
     }
 
-    /// `research_step`: ejecuta un stage (checkpoint entre medio). Cuando no
-    /// quedan stages, ensambla el informe y cierra el job.
-    pub fn research_step(&self, job_id: &str) -> Result<ProgresoInvest, String> {
-        let inv = self.inv();
-        let stage = inv.motor.siguiente_stage(job_id)?.map(|s| s.id.clone());
-        let quedan = inv.ejecutar_siguiente_stage(job_id)?;
-        if quedan {
-            return Ok(ProgresoInvest {
-                job_id: job_id.into(),
-                stage_ejecutado: stage,
-                quedan_stages: true,
-                terminado: false,
-                informe_path: None,
-            });
-        }
-        // No quedan stages: cierre con informe.
-        let informe_path = inv.cerrar_con_informe(job_id)?;
-        Ok(ProgresoInvest {
-            job_id: job_id.into(),
-            stage_ejecutado: stage,
-            quedan_stages: false,
-            terminado: true,
-            informe_path: Some(informe_path.to_string_lossy().into_owned()),
-        })
+    /// `research_pause`: la pausa se hace efectiva en el límite de la etapa.
+    pub fn research_pause(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "pause", "job_id": job_id}))
     }
 
-    /// `research_pause` / `research_resume`.
-    pub fn research_pause(&self, job_id: &str) -> Result<(), String> {
-        MotorTrabajos::nuevo(self.db).pausar(job_id)
+    pub fn research_resume(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "resume", "job_id": job_id}))
     }
 
-    pub fn research_resume(&self, job_id: &str) -> Result<(), String> {
-        MotorTrabajos::nuevo(self.db).reanudar(job_id)
+    pub fn research_cancelar(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "cancel", "job_id": job_id}))
     }
 
-    /// `research_status`: estado del job y de sus stages.
-    pub fn research_status(&self, job_id: &str) -> Result<Job, String> {
-        MotorTrabajos::nuevo(self.db)
-            .obtener_job(job_id)
-            .ok_or_else(|| format!("Job inexistente: {job_id}"))
+    /// `research_continuar_cobertura`: acepta una advertencia de cobertura
+    /// pendiente y sigue con las limitaciones declaradas.
+    pub fn research_continuar_cobertura(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "continue_coverage", "job_id": job_id}))
     }
 
-    /// `research_events`: eventos de progreso del job (append-only).
-    pub fn research_events(&self, job_id: &str) -> Result<Vec<String>, String> {
-        let eventos = MotorTrabajos::nuevo(self.db).listar_eventos(job_id);
-        Ok(eventos
-            .into_iter()
-            .map(|(tipo, stage, payload, ts)| {
-                format!(
-                    "[{ts}] {tipo}{} {payload}",
-                    stage.map(|s| format!(" ({s})")).unwrap_or_default()
-                )
-            })
-            .collect())
+    /// `research_source`: ruta del asset original y página para abrir el escaneo
+    /// real. Solo resuelve items que pertenecen a esta investigación: una fuente
+    /// ajena al recorte no se abre desde acá.
+    pub fn research_source(&self, job_id: &str, item_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "source", "job_id": job_id, "item_id": item_id}))
     }
 
-    /// `research_artifacts`: artefactos del job (síntesis, secciones, informe).
-    pub fn research_artifacts(&self, job_id: &str) -> Result<Vec<ArtifactoJob>, String> {
-        let Ok(mut stmt) = self.db.conn().prepare(
-            "SELECT id, tipo, path, padre, version FROM artifacts WHERE job_id = ?1 \
-             ORDER BY rowid",
-        ) else {
-            return Ok(Vec::new());
-        };
-        let Ok(rows) = stmt.query_map(rusqlite::params![job_id], |r| {
-            Ok(ArtifactoJob {
-                id: r.get(0)?,
-                tipo: r.get(1)?,
-                path: r.get(2)?,
-                padre: r.get(3)?,
-                version: r.get(4)?,
-            })
-        }) else {
-            return Ok(Vec::new());
-        };
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// `research_mostrar_fuente`: ruta del asset original + página para abrir
-    /// el escaneo real en el desktop.
-    pub fn research_mostrar_fuente(&self, item_id: &str) -> Vec<(String, Option<i64>)> {
-        crate::puerta_lectura::mostrar_fuente(self.repo, item_id)
-    }
-
-    /// ¿El job puede retomarse tras un crash? (resume crash-safe, §6.7).
-    pub fn hay_jobs_reanudables(&self) -> Vec<String> {
-        MotorTrabajos::nuevo(self.db)
-            .listar_ids_jobs()
-            .into_iter()
-            .filter(|id| {
-                self.research_status(id)
-                    .map(|j| {
+    /// Jobs que pueden retomarse tras cerrar y reabrir la app.
+    pub fn hay_jobs_reanudables(&self) -> Result<Vec<String>, String> {
+        let listado = self.research_list()?;
+        Ok(listado["jobs"]
+            .as_array()
+            .map(|jobs| {
+                jobs.iter()
+                    .filter(|j| {
                         matches!(
-                            j.status,
-                            EstadoJob::Running
-                                | EstadoJob::Paused
-                                | EstadoJob::AwaitingHuman
-                                | EstadoJob::Planned
+                            j["status"].as_str(),
+                            Some("running") | Some("paused") | Some("awaiting_human")
                         )
                     })
-                    .unwrap_or(false)
+                    .filter_map(|j| j["id"].as_str().map(str::to_string))
+                    .collect()
             })
-            .collect()
-    }
-
-    /// Cierra un job con motivo (por ejemplo, cancelación desde la UI).
-    pub fn research_cancelar(&self, job_id: &str) -> Result<(), String> {
-        MotorTrabajos::nuevo(self.db).cerrar(job_id, MotivoCierre::Cancelled)
+            .unwrap_or_default())
     }
 }
 
@@ -198,17 +163,15 @@ impl<'a> ApiAgente<'a> {
 mod tests {
     use super::*;
     use crate::estado::EstadoDb;
-    use crate::llm_fake::LlmSintetizaEvidencia;
+    use crate::llm_fake::LlmWorkflow;
     use crate::repositorio::RepositorioSqlite;
-    use crate::trabajos::EstadoJob;
 
-    fn base() -> (EstadoDb, RepositorioSqlite, std::path::PathBuf) {
+    fn base() -> (EstadoDb, RepositorioSqlite, PathBuf) {
         let repo =
             RepositorioSqlite::abrir(crate::tests_comunes::corpus_sintetico().to_str().unwrap())
                 .unwrap();
         let db = EstadoDb::abrir_en_memoria().unwrap();
-        // Directorio único por test: los tests corren en paralelo y comparten
-        // el pid.
+        // Directorio único por test: corren en paralelo y comparten el pid.
         let dir = std::env::temp_dir().join(format!(
             "entropia-api-{}-{}",
             std::process::id(),
@@ -222,175 +185,200 @@ mod tests {
     }
 
     fn api<'a>(
-        llm: &'a LlmSintetizaEvidencia,
+        llm: &'a LlmWorkflow,
         db: &'a EstadoDb,
         repo: &'a RepositorioSqlite,
-        dir: &'a std::path::Path,
+        dir: &std::path::Path,
     ) -> ApiAgente<'a> {
         ApiAgente {
             llm,
             repo,
             db,
+            recuperador: None,
             dir_artefactos: dir.to_path_buf(),
         }
     }
 
-    #[test]
-    fn el_ciclo_start_step_pause_resume_status_events_artifacts() {
-        let (db, repo, dir) = base();
-        let llm = LlmSintetizaEvidencia;
-        let api = api(&llm, &db, &repo, &dir);
+    fn pedido() -> Value {
+        json!({
+            "question": "¿Hubo conflictividad en el SOIP?",
+            "project": "soip-conflictividad",
+            "collection_ids": ["c-conflicto"],
+            "max_llm_calls": 40,
+            "max_cost": 5.0
+        })
+    }
 
-        // research_start: crea el job y prepara el plan.
-        let job_id = api
-            .research_start(
-                "¿Conflictividad en el SOIP?",
-                "soip-conflictividad",
-                "{\"modelo\":\"fake\"}",
-                None,
-                None,
-            )
-            .unwrap();
-        let estado = api.research_status(&job_id).unwrap();
-        assert_eq!(estado.status, EstadoJob::Running);
-        assert!(
-            estado.plan_json.is_some(),
-            "el plan debe persistirse al iniciar"
-        );
-
-        // research_step: un stage por llamada hasta terminar. Con el contrato
-        // correcto de ejecutar_siguiente_stage, el último paso cierra el job:
-        // no hay pasos fantasma.
-        let mut pasos = 0;
-        loop {
-            let progreso = api.research_step(&job_id).unwrap();
-            pasos += 1;
-            if progreso.terminado {
-                assert!(progreso.informe_path.is_some());
-                assert!(std::path::Path::new(progreso.informe_path.as_deref().unwrap()).exists());
-                break;
+    /// Avanza respondiendo la ronda cuando el job frena.
+    fn hasta_el_final(api: &ApiAgente, id: &str) -> Value {
+        let mut out = api.research_get(id).unwrap();
+        for _ in 0..60 {
+            match out["job"]["status"].as_str() {
+                Some("done") => return out,
+                Some("awaiting_human") => {
+                    let preguntas = out["artifacts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .rfind(|a| a["kind"] == "clarification_round" && a["obsolete"] == false)
+                        .expect("la ronda tiene que existir")["content"]["questions"]
+                        .as_array()
+                        .unwrap()
+                        .clone();
+                    let respuestas: Vec<Value> = preguntas
+                        .iter()
+                        .map(|q| json!({"id": q["id"], "text": "1965-1966, conflicto gremial"}))
+                        .collect();
+                    out = api.research_answer(id, json!(respuestas)).unwrap();
+                }
+                _ => out = api.research_step(id).unwrap(),
             }
-            assert!(pasos < 10, "el DAG debe converger en pocos pasos");
         }
-        assert_eq!(pasos, 4, "4 stages del plan → 4 steps (el último cierra)");
-        let estado = api.research_status(&job_id).unwrap();
-        assert_eq!(estado.status, EstadoJob::Done);
-        assert_eq!(estado.close_reason, Some(MotivoCierre::Completed));
+        panic!("la investigación no cerró: {}", out["job"]["status"]);
+    }
 
-        // research_events: el timeline quedó registrado.
-        let eventos = api.research_events(&job_id).unwrap();
-        assert!(eventos.iter().any(|e| e.contains("stage_started")));
-        assert!(eventos.iter().any(|e| e.contains("informe_ensamblado")));
+    #[test]
+    fn el_ciclo_completo_pasa_por_la_ronda_y_cierra_con_informe() {
+        let (db, repo, dir) = base();
+        let llm = LlmWorkflow;
+        let api = api(&llm, &db, &repo, &dir);
 
-        // research_artifacts: secciones versionadas + informe.
-        let artefactos = api.research_artifacts(&job_id).unwrap();
-        assert!(artefactos.iter().any(|a| a.tipo == "seccion"));
+        let creado = api.research_create(pedido()).unwrap();
+        let id = creado["job"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(creado["job"]["status"], "running");
+        assert_eq!(creado["job"]["phase"], "coverage");
+
+        let cerrado = hasta_el_final(&api, &id);
+        assert_eq!(cerrado["job"]["status"], "done");
+        assert_eq!(cerrado["job"]["close_reason"], "completed");
+        assert!(dir.join(&id).join("report.json").exists());
+        assert!(dir.join(&id).join("report.md").exists());
+
+        // El listado devuelve el job, las colecciones y las modalidades.
+        let listado = api.research_list().unwrap();
+        assert!(listado["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|j| j["id"] == id.as_str()));
+        assert!(!listado["collections"].as_array().unwrap().is_empty());
+        assert!(listado["modalidades"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"] == "cronologia"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn pausa_y_reanudacion_a_mitad_de_job_con_continuidad_de_checkpoint() {
+    fn los_eventos_y_artefactos_llegan_estructurados_no_como_texto() {
         let (db, repo, dir) = base();
-        let llm = LlmSintetizaEvidencia;
+        let llm = LlmWorkflow;
         let api = api(&llm, &db, &repo, &dir);
+        let id = api.research_create(pedido()).unwrap()["job"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let out = hasta_el_final(&api, &id);
 
-        // start → primer step.
-        let job_id = api
-            .research_start(
-                "¿Conflictividad en el SOIP?",
-                "soip-conflictividad",
-                "{}",
-                None,
-                None,
-            )
-            .unwrap();
-        let p1 = api.research_step(&job_id).unwrap();
-        assert!(!p1.terminado);
-        assert_eq!(
-            api.research_status(&job_id).unwrap().status,
-            EstadoJob::Running
-        );
-
-        // Pausa a mitad de job: el estado persiste y el checkpoint del primer
-        // stage ya quedó registrado.
-        api.research_pause(&job_id).unwrap();
-        assert_eq!(
-            api.research_status(&job_id).unwrap().status,
-            EstadoJob::Paused
-        );
-        let eventos_pausa = api.research_events(&job_id).unwrap();
-        assert!(eventos_pausa.iter().any(|e| e.contains("job_paused")));
-        let completados_antes: i64 = db
-            .conn()
-            .query_row(
-                "SELECT COUNT(*) FROM stages WHERE job_id = ?1 AND status = 'completed'",
-                rusqlite::params![job_id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            completados_antes, 1,
-            "el primer stage quedó completo al pausar"
-        );
-
-        // Reanudar → el job vuelve a running y el step continúa desde donde
-        // quedó (los stages completados antes de la pausa no se repiten).
-        api.research_resume(&job_id).unwrap();
-        assert_eq!(
-            api.research_status(&job_id).unwrap().status,
-            EstadoJob::Running
-        );
-        let mut pasos = 1;
-        loop {
-            let progreso = api.research_step(&job_id).unwrap();
-            pasos += 1;
-            if progreso.terminado {
-                break;
-            }
-            assert!(pasos < 10);
+        // Un evento es un objeto con su tipo y su payload: el frontend no tiene
+        // que parsear prosa para saber qué pasó.
+        let eventos = out["events"].as_array().unwrap();
+        assert!(!eventos.is_empty());
+        for e in eventos {
+            assert!(e["kind"].is_string(), "{e}");
+            assert!(e["timestamp"].is_i64(), "{e}");
         }
-        // El DAG tiene 4 stages: 1 antes de la pausa + 3 después + el cierre
-        // ocurre en el último paso.
-        assert_eq!(pasos, 4, "sin pasos fantasma tras reanudar");
-        let estado = api.research_status(&job_id).unwrap();
-        assert_eq!(estado.status, EstadoJob::Done);
-        let eventos = api.research_events(&job_id).unwrap();
-        assert!(eventos.iter().any(|e| e.contains("job_paused")));
-        assert!(eventos.iter().any(|e| e.contains("job_resumed")));
+        assert!(eventos
+            .iter()
+            .any(|e| e["kind"] == "clarification_requested"));
+        assert!(eventos.iter().any(|e| e["kind"] == "query"));
+
+        // Los artefactos traen su contenido, versión y si quedaron obsoletos.
+        let artefactos = out["artifacts"].as_array().unwrap();
+        for a in artefactos {
+            assert!(a["kind"].is_string(), "{a}");
+            assert!(a["version"].is_i64(), "{a}");
+            assert!(a["obsolete"].is_boolean(), "{a}");
+        }
+        assert!(artefactos.iter().any(|a| a["kind"] == "report"));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn mostrar_fuente_devuelve_el_asset_real() {
+    fn pausa_reanudacion_y_presupuesto_sobre_el_trabajo_existente() {
         let (db, repo, dir) = base();
-        let llm = LlmSintetizaEvidencia;
+        let llm = LlmWorkflow;
         let api = api(&llm, &db, &repo, &dir);
-        // asset-1 pertenece a item-1 en el corpus sintético.
-        let assets = api.research_mostrar_fuente("item-1");
-        assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].0, "escaneos/65-03-17-a.pdf");
-        assert_eq!(assets[0].1, Some(3));
+        let id = api.research_create(pedido()).unwrap()["job"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        api.research_step(&id).unwrap();
+
+        let pausado = api.research_pause(&id).unwrap();
+        assert_eq!(pausado["job"]["status"], "paused");
+        // Pausado no se avanza.
+        assert!(api.research_step(&id).is_err());
+
+        // El presupuesto no puede quedar por debajo de lo consumido.
+        assert!(api.research_budget(&id, 0, None).is_err());
+        let ajustado = api.research_budget(&id, 80, Some(9.0)).unwrap();
+        assert_eq!(ajustado["job"]["max_llm_calls"], 80);
+
+        let reanudado = api.research_resume(&id).unwrap();
+        assert_eq!(reanudado["job"]["status"], "running");
+        assert_eq!(api.hay_jobs_reanudables().unwrap(), vec![id.clone()]);
+
+        // Cancelar lo saca de la lista de reanudables.
+        api.research_cancelar(&id).unwrap();
+        assert!(api.hay_jobs_reanudables().unwrap().is_empty());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn los_jobs_reanudables_se_detectan() {
+    fn la_fuente_se_abre_solo_si_pertenece_a_la_investigacion() {
         let (db, repo, dir) = base();
-        let llm = LlmSintetizaEvidencia;
+        let llm = LlmWorkflow;
         let api = api(&llm, &db, &repo, &dir);
-        let job_id = api
-            .research_start("pregunta", "proyecto", "{}", None, None)
-            .unwrap();
-        // Un paso y pausa: el job queda reanudable.
-        let _ = api.research_step(&job_id).unwrap();
-        api.research_pause(&job_id).unwrap();
-        let reanudables = api.hay_jobs_reanudables();
-        assert!(reanudables.contains(&job_id));
-        // Cancelar lo saca de la lista.
-        api.research_cancelar(&job_id).unwrap();
-        let reanudables = api.hay_jobs_reanudables();
-        assert!(!reanudables.contains(&job_id));
+        let id = api.research_create(pedido()).unwrap()["job"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        hasta_el_final(&api, &id);
+
+        let fuente = api.research_source(&id, "item-1").unwrap();
+        let rutas = fuente["sources"].as_array().unwrap();
+        assert_eq!(rutas[0]["path"], "escaneos/65-03-17-a.pdf");
+        assert_eq!(rutas[0]["page"], 3);
+
+        // Un item que no entró a esta investigación no se abre desde acá.
+        assert!(api.research_source(&id, "item-stress-1").is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn un_error_del_backend_no_se_disfraza_de_exito() {
+        let (db, repo, dir) = base();
+        let llm = LlmWorkflow;
+        let api = api(&llm, &db, &repo, &dir);
+        // Recorte sin material procesado: el job no arranca.
+        let vacio = api.research_create(json!({
+            "question": "¿Hubo conflictividad?",
+            "project": "p",
+            "collection_ids": ["c-volantes"],
+            "max_llm_calls": 20
+        }));
+        assert!(vacio.is_err(), "{vacio:?}");
+        assert!(vacio.unwrap_err().contains("material procesado"));
+
+        // Y un job inexistente tampoco devuelve un snapshot vacío.
+        assert!(api.research_get("job-inexistente").is_err());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

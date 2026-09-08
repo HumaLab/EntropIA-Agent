@@ -116,3 +116,51 @@ fn todas_las_evidencias(contenido: &str) -> Vec<(String, String)> {
     }
     out
 }
+
+/// Doble del workflow durable de investigación: responde los contratos JSON de
+/// cada rol de `investigacion.rs`. Permite ejercitar el ciclo completo de la
+/// API sin red y sin depender del formato de prosa de ningún proveedor.
+pub struct LlmWorkflow;
+
+impl ClienteLlm for LlmWorkflow {
+    fn modelo(&self) -> &str {
+        "fake/workflow"
+    }
+
+    fn ultimo_costo(&self) -> Option<f64> {
+        Some(0.01)
+    }
+
+    fn turno_agente(&self, mensajes: &[Value], _: &[Value]) -> Result<TurnoAgente, String> {
+        let sistema = mensajes[0]["content"].as_str().unwrap_or_default();
+        let usuario = mensajes[1]["content"].as_str().unwrap_or_default();
+        // El verificador manda prosa, no JSON.
+        let datos: Value = serde_json::from_str(usuario).unwrap_or(Value::Null);
+        let salida = if sistema.contains("Rol: prospeccion.") {
+            serde_json::json!({"sufficient":true,"rationale":"El recorte tiene material procesado","gaps":[]})
+        } else if sistema.contains("{hypothesis:") {
+            serde_json::json!({"hypothesis":"Hubo conflictividad","scope":"SOIP","closing_criteria":["Agotar los documentos recuperados"]})
+        } else if sistema.contains("{questions:") {
+            serde_json::json!({"questions":(1..=4).map(|i| serde_json::json!({
+                "id": format!("q{i}"),
+                "axis": "Período",
+                "text": format!("Pregunta {i}"),
+                "rationale": "Cambia el plan"
+            })).collect::<Vec<_>>()})
+        } else if sistema.contains("{queries:") {
+            serde_json::json!({"queries":["huelga"],"bibliography_queries":[],"retrieval_limit":10})
+        } else if sistema.contains("Rol: asistente_archivo.") {
+            let evidencia = datos["evidence"][0]["id"].clone();
+            let texto = datos["evidence"][0]["text"].as_str().unwrap_or_default();
+            let pasaje: String = texto.chars().take(14).collect();
+            serde_json::json!({"summary":"Síntesis","claims":[{"id":"c1","text":"Hubo conflictividad","evidence_ids":[evidencia.clone()],"quotes":[{"evidence_id":evidencia,"quote":pasaje}],"interpretative":false}]})
+        } else if sistema.contains("Rol: asistente_bibliografia.") {
+            serde_json::json!({"references":[],"synthesis":"Sin consultas bibliográficas"})
+        } else if sistema.contains("Sos el Verificador de EntropIA.") {
+            serde_json::json!({"estado":"supported","rationale":"El pasaje sostiene la afirmación","error_kind":null})
+        } else {
+            serde_json::json!({"title":"Informe","sections":[{"title":"Hechos","text":"Hubo conflictividad","claim_ids":["c1"]}]})
+        };
+        Ok(TurnoAgente::Texto(salida.to_string()))
+    }
+}
