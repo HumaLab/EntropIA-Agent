@@ -14,7 +14,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 /// Versión de esquema actual del estado del agente.
-pub const VERSION_ESQUEMA: i64 = 4;
+pub const VERSION_ESQUEMA: i64 = 5;
 
 /// Migraciones incrementales: índice i → versión i+1.
 ///
@@ -268,6 +268,11 @@ CREATE TABLE source_versions (
     r#"
 ALTER TABLE verification_runs ADD COLUMN obsoleto INTEGER NOT NULL DEFAULT 0;
 "#,
+    r#"
+ALTER TABLE artifacts ADD COLUMN content_json TEXT;
+ALTER TABLE artifacts ADD COLUMN obsolete INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE human_decisions ADD COLUMN obsolete INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 /// Base de estado del agente (escritura).
@@ -388,9 +393,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn la_base_nueva_aplica_las_migraciones() {
+    fn la_base_nueva_aplica_todas_las_migraciones() {
         let db = EstadoDb::abrir_en_memoria().unwrap();
-        assert_eq!(db.version_esquema(), 4);
+        assert_eq!(
+            db.version_esquema(),
+            VERSION_ESQUEMA,
+            "una base nueva tiene que quedar en la última versión declarada"
+        );
+        assert_eq!(
+            MIGRACIONES.len() as i64,
+            VERSION_ESQUEMA,
+            "VERSION_ESQUEMA y la cantidad de migraciones no pueden divergir"
+        );
     }
 
     #[test]
@@ -401,10 +415,19 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let db = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db.version_esquema(), 4);
+        db.conn().execute("INSERT INTO memories(id,title,type,content,project,created_at,updated_at) VALUES('persisted','Título','finding','Contenido','proyecto',1,1)", []).unwrap();
         drop(db);
         let db2 = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
-        assert_eq!(db2.version_esquema(), 4);
+        let content: String = db2
+            .conn()
+            .query_row(
+                "SELECT content FROM memories WHERE id='persisted'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(content, "Contenido");
+        drop(db2);
         let _ = std::fs::remove_file(&path);
     }
 

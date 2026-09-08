@@ -9,7 +9,7 @@ license = "MIT"
 # SQLite embebido (feature "bundled") para no depender de una librería de
 # sistema en Windows. Se abre en modo solo lectura sobre la base común de la
 # app EntropIA, sin alterar la base activa del usuario.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Cliente HTTP para OpenRouter. Se alinean los features con los de
 # EntropIA-Pro-Lite: TLS via rustls y certificados nativos del sistema.

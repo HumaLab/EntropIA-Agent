@@ -12,6 +12,7 @@ pub struct ClienteLlmOpenRouter {
     client: reqwest::blocking::Client,
     api_key: String,
     model: String,
+    ultimo_costo: std::cell::Cell<Option<f64>>,
 }
 
 impl ClienteLlmOpenRouter {
@@ -29,6 +30,7 @@ impl ClienteLlmOpenRouter {
                 .unwrap_or_default(),
             api_key: api_key.into(),
             model: model.into(),
+            ultimo_costo: std::cell::Cell::new(None),
         }
     }
 
@@ -39,6 +41,7 @@ impl ClienteLlmOpenRouter {
         mensajes: &[Value],
         herramientas: &[Value],
     ) -> Result<TurnoAgente, String> {
+        self.ultimo_costo.set(None);
         let mut request = json!({
             "model": self.model,
             "messages": mensajes,
@@ -74,6 +77,11 @@ impl ClienteLlmOpenRouter {
         let inicio = bytes.iter().position(|&b| b == b'{').unwrap_or(0);
         let parsed: Value = serde_json::from_slice(&bytes[inicio..])
             .map_err(|e| format!("No se pudo leer la respuesta de OpenRouter: {e}"))?;
+        self.ultimo_costo.set(
+            parsed["usage"]["cost"]
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0),
+        );
 
         let mensaje = &parsed["choices"][0]["message"];
         if let Some(tool_calls) = mensaje["tool_calls"].as_array() {
@@ -130,6 +138,11 @@ pub trait ClienteLlm {
 
     /// Modelo activo (para el snapshot de reproducibilidad del job).
     fn modelo(&self) -> &str;
+
+    /// Costo reportado por el proveedor para el último intento; None no significa cero.
+    fn ultimo_costo(&self) -> Option<f64> {
+        None
+    }
 }
 
 impl ClienteLlm for ClienteLlmOpenRouter {
@@ -143,5 +156,9 @@ impl ClienteLlm for ClienteLlmOpenRouter {
 
     fn modelo(&self) -> &str {
         &self.model
+    }
+
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.ultimo_costo.get()
     }
 }

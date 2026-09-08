@@ -24,6 +24,22 @@ fn la_denylist_deja_fuera_las_colecciones_de_prueba_de_los_listados() {
 }
 
 #[test]
+fn el_listado_completo_alinea_investigar_con_colecciones() {
+    let repo =
+        RepositorioSqlite::abrir(common::crear_corpus_sintetico().to_str().unwrap()).unwrap();
+    let filtradas = repo.listar_colecciones();
+    let todas = repo.listar_todas_las_colecciones();
+    assert_eq!(filtradas.len(), 3);
+    assert_eq!(todas.len(), filtradas.len() + 6);
+    for excluida in entropia_agent::configuracion::colecciones_excluidas() {
+        assert!(
+            todas.iter().any(|c| c.nombre == excluida),
+            "{excluida} debe aparecer en Investigar como en Colecciones"
+        );
+    }
+}
+
+#[test]
 fn cargar_chunks_excluye_los_de_colecciones_de_prueba() {
     let repo =
         RepositorioSqlite::abrir(common::crear_corpus_sintetico().to_str().unwrap()).unwrap();

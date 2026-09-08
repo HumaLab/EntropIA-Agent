@@ -293,7 +293,21 @@ impl RepositorioSqlite {
     /// Lista las colecciones reales (fuera de la denylist) con su cobertura:
     /// items, items con chunks y chunks.
     pub fn listar_colecciones(&self) -> Vec<ColeccionInfo> {
-        let (clausula, nombres) = self.clausula_no_excluidas();
+        self.listar_colecciones_con(true)
+    }
+
+    /// Mismo recuento que Colecciones en el desktop: sin ocultar pruebas.
+    pub fn listar_todas_las_colecciones(&self) -> Vec<ColeccionInfo> {
+        self.listar_colecciones_con(false)
+    }
+
+    fn listar_colecciones_con(&self, filtrar_denylist: bool) -> Vec<ColeccionInfo> {
+        let (filtro, nombres) = if filtrar_denylist {
+            let (clausula, nombres) = self.clausula_no_excluidas();
+            (format!("WHERE {clausula}"), nombres)
+        } else {
+            (String::new(), Vec::new())
+        };
         let sql = format!(
             "\
 SELECT c.id, c.name, \
@@ -303,7 +317,7 @@ SELECT c.id, c.name, \
 FROM collections c \
 LEFT JOIN items i ON i.collection_id = c.id \
 LEFT JOIN rag_chunks rc ON rc.item_id = i.id \
-WHERE {clausula} \
+{filtro} \
 GROUP BY c.id, c.name \
 ORDER BY items DESC"
         );
