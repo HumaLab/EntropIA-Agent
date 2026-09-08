@@ -1809,3 +1809,34 @@ fn una_ronda_abierta_estaciona_el_job_en_vez_de_girar_en_vacio() {
         .iter()
         .any(|e| e["kind"] == "clarification_pending"));
 }
+
+#[test]
+fn el_artefacto_lleva_el_informe_renderizado_para_que_nadie_lo_rearme() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("markdown-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    // Un consumidor que rearma el documento desde `sections[].text` pierde la
+    // cobertura, los fragmentos citados y «Fuentes citadas». El armado es del
+    // motor: el artefacto lo lleva hecho.
+    let markdown = artefacto(&out, "report")["markdown"]
+        .as_str()
+        .expect("el artefacto tiene que llevar el informe renderizado")
+        .to_owned();
+    assert!(
+        markdown.contains("## Cobertura del recorte consultado"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("## Fuentes citadas"), "{markdown}");
+    assert!(markdown.contains("> huelga general"), "{markdown}");
+    assert!(markdown.contains("**Perfil de informe:**"), "{markdown}");
+
+    // Y es exactamente lo que se escribe en disco: una sola fuente de armado.
+    let en_disco = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert_eq!(en_disco, markdown);
+}

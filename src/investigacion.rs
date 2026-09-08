@@ -914,11 +914,15 @@ impl Engine<'_> {
                 );
                 cite_report(&mut o, &claims, &a["evidence"], &self.collections());
                 self.recordar(id, &supplied)?;
-                (
-                    "report",
-                    json!({"report":o,"coverage":self.current(id,"coverage")?,"coverage_warning":self.current(id,"prospection")?,"archive_limitations":a["limitations"],"dropped_claims":a["dropped"],"role_warnings":self.role_warnings(id)?,"verification":v,"bibliography":self.current(id,"bibliography")?,"clarification":clarification,"profile":{"id":perfil.id,"name":perfil.nombre,"bias":perfil.sesgo_declarado}}),
-                    false,
-                )
+                let mut contenido = json!({"report":o,"coverage":self.current(id,"coverage")?,"coverage_warning":self.current(id,"prospection")?,"archive_limitations":a["limitations"],"dropped_claims":a["dropped"],"role_warnings":self.role_warnings(id)?,"verification":v,"bibliography":self.current(id,"bibliography")?,"clarification":clarification,"profile":{"id":perfil.id,"name":perfil.nombre,"bias":perfil.sesgo_declarado}});
+                // El informe renderizado viaja dentro del artefacto. Sin esto
+                // cada consumidor rearma el documento por su cuenta desde
+                // `sections[].text` y pierde en el camino la cobertura, los
+                // fragmentos citados y «Fuentes citadas» —que es exactamente
+                // lo que le pasó al desktop—. El armado del informe es del
+                // motor, no de cada frontend.
+                contenido["markdown"] = json!(crate::informe_render::render(&contenido));
+                ("report", contenido, false)
             }
             _ => return Err("No quedan etapas ejecutables".into()),
         };
@@ -952,11 +956,11 @@ impl Engine<'_> {
                 serde_json::to_vec_pretty(&output).map_err(err)?,
             )
             .map_err(err)?;
-            // El informe que efectivamente lee el investigador: cobertura,
-            // fragmentos reproducidos y «Fuentes citadas».
+            // El mismo documento que viaja en el artefacto: una sola fuente
+            // de armado para el archivo en disco y para cualquier consumidor.
             std::fs::write(
                 path.join("report.md"),
-                crate::informe_render::render(&output),
+                output["markdown"].as_str().unwrap_or_default(),
             )
             .map_err(err)?;
         }
@@ -1244,7 +1248,7 @@ impl Engine<'_> {
                 self.call(
                     id,
                     "asistente_archivo",
-                    &format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],quotes:[{{evidence_id:string,quote:string}}],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id, y quotes con el pasaje LITERAL de evidence[].text que lo sostiene, copiado carácter por carácter sin resumir ni corregir. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim),
+                    &format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],quotes:[{{evidence_id:string,quote:string}}],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id, y quotes con el pasaje LITERAL de evidence[].text que lo sostiene, copiado carácter por carácter sin resumir ni corregir. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids, y sin nombrar los IDs E1, E2…: son internos de este lote y el investigador que lee el informe no sabe qué son. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim),
                     input.clone(),
                 )?
             };
