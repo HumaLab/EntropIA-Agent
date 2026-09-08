@@ -174,6 +174,15 @@ fn pie_referencia(r: &Value) -> String {
             .unwrap_or("item sin título")
             .to_string(),
     );
+    // La fecha del documento se declara con su precisión: un «1965» derivado
+    // del año de la colección no puede leerse como si fuera un día exacto.
+    if let Some(fecha) = r["date"].as_str().filter(|f| !f.trim().is_empty()) {
+        partes.push(match r["date_precision"].as_str() {
+            Some("month") => format!("{fecha} (mes)"),
+            Some("year") => format!("{fecha} (año)"),
+            _ => fecha.to_string(),
+        });
+    }
     partes.push(format!(
         "fragmento {}",
         r["chunk_id"].as_str().unwrap_or("sin id")

@@ -207,6 +207,11 @@ struct Citation {
     start: i64,
     #[serde(default)]
     end: i64,
+    /// Fecha del documento, ya recortada a su precisión.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    date_precision: Option<String>,
     /// El fragmento excede la ventana y se reproduce recortado. El texto
     /// guardado sigue siendo literal: el recorte se señala al renderizar.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -980,7 +985,9 @@ impl Engine<'_> {
                         .fragmentos
                         .into_iter()
                         .map(|f| {
-                            json!({"id":f.chunk_id,"item_id":f.item_id,"title":f.item_titulo,"text":f.texto,"asset_id":f.asset_id,"start":f.start,"end":f.end,"collection_id":f.collection_id,"provenance":"entropia_chunk"})
+                            let mut fila = json!({"id":f.chunk_id,"item_id":f.item_id,"title":f.item_titulo,"text":f.texto,"asset_id":f.asset_id,"start":f.start,"end":f.end,"collection_id":f.collection_id,"provenance":"entropia_chunk"});
+                            fila["document_date"] = fecha_documento(&f.item_titulo, &f.coleccion);
+                            fila
                         })
                         .collect::<Vec<_>>()
                 }
@@ -999,6 +1006,14 @@ impl Engine<'_> {
         Ok(out)
     }
 
+    fn nombre_coleccion(&self, id: &str) -> String {
+        self.collections()
+            .as_array()
+            .and_then(|cs| cs.iter().find(|c| c["id"] == id).cloned())
+            .and_then(|c| c["name"].as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
     /// Pierna léxica sola, acotada por colección. Es el modo degradado.
     fn retrieve_lexico(&self, w: &Workflow, p: &Plan, query: &str) -> Result<Vec<Value>, String> {
         let fts = fts5_query(query);
@@ -1009,8 +1024,13 @@ impl Engine<'_> {
         for col in &w.collections {
             let sql="SELECT rc.id,rc.item_id,i.title,rc.text_content,rc.asset_id,rc.start_char,rc.end_char FROM rag_chunks_fts f JOIN rag_chunks rc ON rc.id=f.chunk_id JOIN items i ON i.id=rc.item_id WHERE rag_chunks_fts MATCH ?1 AND i.collection_id=?2 ORDER BY bm25(rag_chunks_fts),rc.id LIMIT ?3";
             let mut st = self.repo.prepare_pub(sql).map_err(err)?;
+            let coleccion = self.nombre_coleccion(col);
             let rows=st.query_map(params![fts,col,p.retrieval_limit as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item_id":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"asset_id":r.get::<_,String>(4)?,"start":r.get::<_,i64>(5)?,"end":r.get::<_,i64>(6)?,"collection_id":col,"provenance":"entropia_chunk"}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
-            out.extend(rows);
+            for mut fila in rows {
+                fila["document_date"] =
+                    fecha_documento(fila["title"].as_str().unwrap_or_default(), &coleccion);
+                out.push(fila);
+            }
         }
         Ok(out)
     }
@@ -1467,6 +1487,20 @@ impl Engine<'_> {
                                 &row.to_string(),
                                 row["text"].as_str(),
                             )?;
+                            // `document_date` derivada del título del item: es
+                            // metadata determinista de la fuente, no salida del
+                            // modelo, y viaja con su precisión y su confianza.
+                            if let Some(fecha) = row["document_date"].as_object() {
+                                if let Some(iso) = fecha["iso"].as_str() {
+                                    ledger.registrar_metadata_temporal(
+                                        &f,
+                                        iso,
+                                        fecha["precision"].as_str().unwrap_or("none"),
+                                        fecha["confidence"].as_f64().unwrap_or(0.0),
+                                        fecha["source"].as_str().unwrap_or("titulo"),
+                                    )?;
+                                }
+                            }
                             fuentes.insert(q.evidence_id.clone(), f.clone());
                             f
                         }
@@ -1909,6 +1943,36 @@ fn cita_de_pasaje(n: usize, row: &Value, collections: &Value, q: &Quote) -> Cita
     }
 }
 
+/// Fecha del documento derivada del título y la colección.
+///
+/// Determinista y con provenance propia: nunca la escribe el modelo. Viaja con
+/// su precisión porque una fecha imprecisa se declara imprecisa; redondear un
+/// «1965» a un día concreto inventa una certeza que el documento no tiene.
+fn fecha_documento(titulo: &str, coleccion: &str) -> Value {
+    match crate::fechas::document_date(titulo, coleccion, None) {
+        Some(c) => match c.fecha {
+            Some(f) => json!({
+                "iso": f.iso(),
+                "display": segun_precision(&f, c.precision),
+                "precision": c.precision.as_str(),
+                "confidence": c.confidence,
+                "source": c.source,
+            }),
+            None => Value::Null,
+        },
+        None => Value::Null,
+    }
+}
+
+/// Recorta la fecha a lo que la precisión sostiene.
+fn segun_precision(f: &crate::fechas::Fecha, p: crate::fechas::Precision) -> String {
+    match p {
+        crate::fechas::Precision::Dia => f.iso(),
+        crate::fechas::Precision::Mes => format!("{:04}-{:02}", f.anio, f.mes.unwrap_or(0)),
+        _ => format!("{:04}", f.anio),
+    }
+}
+
 fn cita(n: usize, row: &Value, collections: &Value, con_texto: bool) -> Citation {
     let (text, truncated) = if con_texto {
         ventana(row["text"].as_str().unwrap_or(""))
@@ -1932,6 +1996,10 @@ fn cita(n: usize, row: &Value, collections: &Value, con_texto: bool) -> Citation
             .filter(|t| !t.trim().is_empty())
             .unwrap_or("item sin título")
             .to_string(),
+        date: row["document_date"]["display"].as_str().map(str::to_string),
+        date_precision: row["document_date"]["precision"]
+            .as_str()
+            .map(str::to_string),
         end: if truncated {
             start + text.chars().count() as i64
         } else {

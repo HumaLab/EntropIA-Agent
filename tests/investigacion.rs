@@ -1644,3 +1644,69 @@ fn solo_se_recuerda_lo_que_quedo_sostenido() {
         "una conjetura no verificada no puede volver como hallazgo: {recordado:?}"
     );
 }
+
+#[test]
+fn la_fecha_del_documento_viaja_desde_el_titulo_hasta_la_cita() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("fechas-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    // 1. La evidencia recuperada trae la fecha derivada del título del item.
+    let evidencia = artefacto(&out, "archive")["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "chunk-1")
+        .unwrap()
+        .clone();
+    assert_eq!(evidencia["document_date"]["iso"], "1965-03-17");
+    assert_eq!(evidencia["document_date"]["precision"], "day");
+
+    // 2. Y quedó asentada sobre la fuente en el ledger.
+    let ledger_id = artefacto(&out, "archive")["claims"][0]["ledger_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let ledger = entropia_agent::dominio::Ledger::nuevo(&db);
+    let (evidencia_ledger, _, _) = ledger.evidencias_del_claim(&ledger_id)[0].clone();
+    let (fecha, precision, confianza, derivacion) = ledger
+        .metadata_temporal(&evidencia_ledger.source_id)
+        .expect("la fuente tiene que declarar su fecha");
+    assert_eq!(fecha, "1965-03-17");
+    assert_eq!(precision, "day");
+    assert!(confianza > 0.0);
+    assert!(!derivacion.is_empty());
+
+    // 3. Y el informe la declara en la referencia.
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(
+        md.contains("· 1965-03-17 · fragmento chunk-1"),
+        "la referencia tiene que declarar la fecha del documento:\n{md}"
+    );
+}
+
+#[test]
+fn una_fecha_imprecisa_se_declara_imprecisa() {
+    // El render recorta a la precisión y la nombra: un año derivado no puede
+    // leerse como un día exacto.
+    let referencia = json!({
+        "n": 1,
+        "chunk_id": "chunk-9",
+        "title": "IMG_2991",
+        "date": "1961",
+        "date_precision": "year",
+        "start": 0,
+        "end": 10
+    });
+    let artefacto = json!({
+        "report": {"title":"T","sections":[],"references":[referencia]},
+        "coverage": {"collections":[]}
+    });
+    let md = entropia_agent::informe_render::render(&artefacto);
+    assert!(md.contains("1961 (año)"), "{md}");
+}

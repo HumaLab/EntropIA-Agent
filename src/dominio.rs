@@ -725,6 +725,28 @@ impl<'a> Ledger<'a> {
             .map_err(|e| e.to_string())
     }
 
+    /// Metadata temporal vigente de una fuente: fecha, precisión, confianza y
+    /// de qué capa se derivó. Escribir una fecha que nadie puede leer es lo
+    /// mismo que no tenerla.
+    pub fn metadata_temporal(&self, source_id: &str) -> Option<(String, String, f64, String)> {
+        self.db
+            .conn()
+            .query_row(
+                "SELECT date, precision, confidence, derivation FROM source_temporal_metadata \
+                 WHERE source_id = ?1 ORDER BY rowid DESC LIMIT 1",
+                params![source_id],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                        r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                        r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    ))
+                },
+            )
+            .ok()
+    }
+
     /// Liga una memoria longitudinal a una evidencia (PLAN §7.2).
     pub fn ligar_memoria_evidencia(
         &self,
