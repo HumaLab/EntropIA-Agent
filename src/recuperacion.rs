@@ -150,10 +150,19 @@ impl Recuperacion {
 
 /// Orquestador de recuperación híbrida.
 pub struct Recuperador {
-    embeddings: Box<dyn Embedder>,
-    rerank: Box<dyn Reranker>,
+    embeddings: Box<dyn Embedder + Send + Sync>,
+    rerank: Box<dyn Reranker + Send + Sync>,
     cache: Mutex<CacheChunks>,
 }
+
+// El recuperador se comparte entre hilos: el desktop lo construye una vez por
+// credencial y lo usa desde el conductor de jobs. Los objetos de trait le
+// habían sacado esa propiedad en silencio —los clientes concretos sí la
+// tenían— y el consumidor se enteró al compilar. Esta aserción lo fija.
+const _: fn() = || {
+    fn compartible<T: Send + Sync>() {}
+    compartible::<Recuperador>();
+};
 
 impl Recuperador {
     pub fn new(embeddings: ClienteEmbeddings, rerank: ClienteRerank) -> Self {
@@ -162,7 +171,10 @@ impl Recuperador {
 
     /// Constructor por trait: permite ejercitar la recuperación completa sin
     /// red, y sustituir proveedores sin tocar el pipeline.
-    pub fn con_clientes(embeddings: Box<dyn Embedder>, rerank: Box<dyn Reranker>) -> Self {
+    pub fn con_clientes(
+        embeddings: Box<dyn Embedder + Send + Sync>,
+        rerank: Box<dyn Reranker + Send + Sync>,
+    ) -> Self {
         Self {
             embeddings,
             rerank,
