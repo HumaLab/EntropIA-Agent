@@ -23,9 +23,20 @@ pub struct Fuente {
 /// Fragmento de texto con su embedding, para la búsqueda semántica.
 pub struct ChunkRag {
     pub id: String,
+    /// Item al que pertenece el fragmento: sin esto no se puede abrir la
+    /// fuente real ni referenciarla en «Fuentes citadas».
+    pub item_id: String,
     pub item_titulo: String,
+    /// Identificador de la colección, no su nombre: es lo que permite acotar
+    /// la recuperación al recorte congelado del job.
+    pub collection_id: String,
     pub coleccion: String,
+    pub asset_id: String,
     pub text_content: String,
+    /// Rango de caracteres del fragmento dentro del texto del asset. La cita
+    /// lo declara para que el investigador pueda ir a buscarlo.
+    pub start_char: i64,
+    pub end_char: i64,
     pub embedding: Vec<f32>,
 }
 
@@ -114,7 +125,9 @@ impl RepositorioSqlite {
         let (clausula, nombres) = self.clausula_no_excluidas();
         let sql = format!(
             "\
-SELECT rc.id, rc.text_content, rc.embedding, i.title, COALESCE(c.name, '') \
+SELECT rc.id, rc.text_content, rc.embedding, i.title, COALESCE(c.name, ''), \
+       rc.item_id, COALESCE(i.collection_id, ''), rc.asset_id, \
+       rc.start_char, rc.end_char \
 FROM rag_chunks rc \
 LEFT JOIN items i ON i.id = rc.item_id \
 LEFT JOIN collections c ON c.id = i.collection_id \
@@ -131,6 +144,11 @@ WHERE {clausula}"
                     embedding: crate::vector::decodificar_embedding(&blob),
                     item_titulo: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
                     coleccion: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    item_id: row.get(5)?,
+                    collection_id: row.get(6)?,
+                    asset_id: row.get(7)?,
+                    start_char: row.get(8)?,
+                    end_char: row.get(9)?,
                 })
             })
             .map_err(|e| e.to_string())?;

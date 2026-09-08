@@ -4,6 +4,7 @@ use crate::{
     cliente_llm::{ClienteLlm, TurnoAgente},
     estado::{ahora, nuevo_id, EstadoDb},
     perfiles::{self, Perfil},
+    recuperacion::Recuperador,
     repositorio::{fts5_query, RepositorioSqlite},
     trabajos::{ConfigJob, MotorTrabajos},
 };
@@ -181,14 +182,26 @@ struct Citation {
     truncated: bool,
 }
 
+/// Punto de entrada del workflow.
+///
+/// `rec` es la recuperación híbrida (semántica + léxica + rerank). En `None`
+/// el motor cae a búsqueda léxica sola y **lo declara en el informe**: es un
+/// modo degradado legítimo —sin claves de API o sin red— pero nunca silencioso.
 pub fn procesar(
     db: &EstadoDb,
     repo: &RepositorioSqlite,
     llm: &dyn ClienteLlm,
+    rec: Option<&Recuperador>,
     dir: &Path,
     request: Value,
 ) -> Result<Value, String> {
-    let e = Engine { db, repo, llm, dir };
+    let e = Engine {
+        db,
+        repo,
+        llm,
+        rec,
+        dir,
+    };
     let op = required(&request, "op")?;
     if op == "list" {
         return e.list();
@@ -338,6 +351,7 @@ struct Engine<'a> {
     db: &'a EstadoDb,
     repo: &'a RepositorioSqlite,
     llm: &'a dyn ClienteLlm,
+    rec: Option<&'a Recuperador>,
     dir: &'a Path,
 }
 impl Engine<'_> {
@@ -884,28 +898,67 @@ impl Engine<'_> {
         }
         Ok(())
     }
+    /// Recupera la evidencia del plan, siempre acotada al recorte del job.
+    ///
+    /// Con `Recuperador` corre el pipeline híbrido del desktop: BGE-M3, FTS5,
+    /// fusión RRF y rerank. Sin él, búsqueda léxica sola. Cualquier pérdida de
+    /// alcance se registra como degradación y termina impresa en el informe:
+    /// la primera pata de la cadena de atribución de fallos es el retrieval, y
+    /// un informe que no declara con qué buscó no se puede auditar.
     fn retrieve(&self, id: &str, w: &Workflow, p: &Plan) -> Result<Vec<Value>, String> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         for query in &p.queries {
-            let fts = fts5_query(query);
-            if fts.is_empty() {
-                continue;
-            }
-            for col in &w.collections {
-                let sql="SELECT rc.id,rc.item_id,i.title,rc.text_content,rc.asset_id,rc.start_char,rc.end_char FROM rag_chunks_fts f JOIN rag_chunks rc ON rc.id=f.chunk_id JOIN items i ON i.id=rc.item_id WHERE rag_chunks_fts MATCH ?1 AND i.collection_id=?2 ORDER BY bm25(rag_chunks_fts),rc.id LIMIT ?3";
-                let mut st = self.repo.prepare_pub(sql).map_err(err)?;
-                let rows=st.query_map(params![fts,col,p.retrieval_limit as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item_id":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"asset_id":r.get::<_,String>(4)?,"start":r.get::<_,i64>(5)?,"end":r.get::<_,i64>(6)?,"provenance":"entropia_chunk"}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
-                self.event(id,"query",json!({"query":query,"collection_id":col,"retrieved":rows.len(),"limit":p.retrieval_limit}))?;
-                for mut r in rows {
-                    // La colección viaja con la evidencia: sin ella la línea de
-                    // «Fuentes citadas» no puede nombrarla.
-                    r["collection_id"] = json!(col);
-                    if seen.insert(r["id"].as_str().ok_or("Chunk sin ID")?.to_string()) {
-                        out.push(r);
+            let recuperado = match self.rec {
+                Some(rec) => {
+                    let salida = rec.recuperar_en_colecciones(
+                        self.repo,
+                        query,
+                        &w.collections,
+                        p.retrieval_limit,
+                    );
+                    if let Some(motivo) = salida.degradacion {
+                        self.event(
+                            id,
+                            "retrieval_degraded",
+                            json!({"role":"recuperacion","error":motivo,"query":query}),
+                        )?;
                     }
+                    salida
+                        .fragmentos
+                        .into_iter()
+                        .map(|f| {
+                            json!({"id":f.chunk_id,"item_id":f.item_id,"title":f.item_titulo,"text":f.texto,"asset_id":f.asset_id,"start":f.start,"end":f.end,"collection_id":f.collection_id,"provenance":"entropia_chunk"})
+                        })
+                        .collect::<Vec<_>>()
+                }
+                None => {
+                    self.event(id,"retrieval_degraded",json!({"role":"recuperacion","error":"recuperación solo léxica: sin cliente de embeddings ni rerank, los documentos que no coinciden por vocabulario quedan fuera","query":query}))?;
+                    self.retrieve_lexico(w, p, query)?
+                }
+            };
+            self.event(id,"query",json!({"query":query,"retrieved":recuperado.len(),"limit":p.retrieval_limit,"pipeline":if self.rec.is_some() {"hibrida"} else {"lexica"}}))?;
+            for r in recuperado {
+                if seen.insert(r["id"].as_str().ok_or("Chunk sin ID")?.to_string()) {
+                    out.push(r);
                 }
             }
+        }
+        Ok(out)
+    }
+
+    /// Pierna léxica sola, acotada por colección. Es el modo degradado.
+    fn retrieve_lexico(&self, w: &Workflow, p: &Plan, query: &str) -> Result<Vec<Value>, String> {
+        let fts = fts5_query(query);
+        if fts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for col in &w.collections {
+            let sql="SELECT rc.id,rc.item_id,i.title,rc.text_content,rc.asset_id,rc.start_char,rc.end_char FROM rag_chunks_fts f JOIN rag_chunks rc ON rc.id=f.chunk_id JOIN items i ON i.id=rc.item_id WHERE rag_chunks_fts MATCH ?1 AND i.collection_id=?2 ORDER BY bm25(rag_chunks_fts),rc.id LIMIT ?3";
+            let mut st = self.repo.prepare_pub(sql).map_err(err)?;
+            let rows=st.query_map(params![fts,col,p.retrieval_limit as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item_id":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"asset_id":r.get::<_,String>(4)?,"start":r.get::<_,i64>(5)?,"end":r.get::<_,i64>(6)?,"collection_id":col,"provenance":"entropia_chunk"}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
+            out.extend(rows);
         }
         Ok(out)
     }
@@ -947,7 +1000,7 @@ impl Engine<'_> {
         let mut st = self
             .db
             .conn()
-            .prepare("SELECT payload FROM job_events WHERE job_id=?1 AND tipo='role_warning' ORDER BY rowid")
+            .prepare("SELECT payload FROM job_events WHERE job_id=?1 AND tipo IN ('role_warning','retrieval_degraded') ORDER BY rowid")
             .map_err(err)?;
         let rows = st
             .query_map([id], |r| r.get::<_, Option<String>>(0))

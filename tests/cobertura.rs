@@ -79,3 +79,21 @@ fn cobertura_declara_items_con_y_sin_chunks() {
     assert_eq!(conflicto.items_sin_procesar(), 1);
     assert_eq!(conflicto.chunks, 2);
 }
+
+#[test]
+fn los_chunks_traen_identidad_y_offsets_para_poder_citarlos() {
+    let repo =
+        RepositorioSqlite::abrir(common::crear_corpus_sintetico().to_str().unwrap()).unwrap();
+    let chunks = repo.cargar_chunks().unwrap();
+    let chunk = chunks.iter().find(|c| c.id == "chunk-1").unwrap();
+    // Sin item_id no hay forma de abrir la fuente ni de referenciarla; sin
+    // collection_id no se puede acotar la recuperación al recorte del job;
+    // sin offsets la cita no puede declarar de dónde sale.
+    assert_eq!(chunk.item_id, "item-1");
+    assert_eq!(chunk.collection_id, "c-conflicto");
+    assert_eq!(chunk.asset_id, "chunk-1");
+    assert_eq!(chunk.start_char, 0);
+    assert_eq!(chunk.end_char, 100);
+    assert_eq!(chunk.item_titulo, "65-03-17-a");
+    assert_eq!(chunk.coleccion, "Conflicto SOIP 1965-66");
+}

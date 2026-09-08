@@ -59,7 +59,7 @@ impl ClienteLlm for Model {
     }
 }
 fn create(db: &EstadoDb, repo: &RepositorioSqlite, m: &Model, dir: &std::path::Path) -> Value {
-    procesar(db,repo,m,dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0})).unwrap()
+    procesar(db,repo,m,None,dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0})).unwrap()
 }
 fn step(
     db: &EstadoDb,
@@ -68,7 +68,7 @@ fn step(
     dir: &std::path::Path,
     id: &str,
 ) -> Value {
-    procesar(db, repo, m, dir, json!({"op":"advance","job_id":id})).unwrap()
+    procesar(db, repo, m, None, dir, json!({"op":"advance","job_id":id})).unwrap()
 }
 /// Preguntas de la ronda vigente en un snapshot.
 fn round_questions(snapshot: &Value) -> Vec<Value> {
@@ -104,6 +104,7 @@ fn answer_round(
         db,
         repo,
         m,
+        None,
         dir,
         json!({"op":"answer","job_id":id,"answers":answers}),
     )
@@ -126,7 +127,7 @@ fn correr(
     dir: &std::path::Path,
     id: &str,
 ) -> Value {
-    let mut out = procesar(db, repo, m, dir, json!({"op":"get","job_id":id})).unwrap();
+    let mut out = procesar(db, repo, m, None, dir, json!({"op":"get","job_id":id})).unwrap();
     for _ in 0..60 {
         match out["job"]["status"].as_str() {
             Some("done") => return out,
@@ -136,6 +137,7 @@ fn correr(
                     db,
                     repo,
                     m,
+                    None,
                     dir,
                     json!({"op":"answer","job_id":id,"answers":answers}),
                 )
@@ -171,7 +173,7 @@ fn no_model_call_before_scope() {
         questions: 4,
     };
     let dir = path.with_extension("artifacts");
-    assert!(procesar(&db,&repo,&m,&dir,json!({"op":"create","question":"q","project":"p","collection_ids":["c-volantes"],"max_llm_calls":20})).is_err());
+    assert!(procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"q","project":"p","collection_ids":["c-volantes"],"max_llm_calls":20})).is_err());
     let s = create(&db, &repo, &m, &dir);
     assert_eq!(s["job"]["status"], "running");
     assert_eq!(m.calls.get(), 0);
@@ -203,7 +205,15 @@ fn la_ronda_de_preguntas_frena_el_informe_hasta_que_el_investigador_responde() {
     assert_eq!(asked["job"]["phase"], "clarification");
     assert!(round_questions(&asked).len() >= 4, "{asked}");
     assert!(
-        procesar(&db, &repo, &m, &dir, json!({"op":"advance","job_id":id})).is_err(),
+        procesar(
+            &db,
+            &repo,
+            &m,
+            None,
+            &dir,
+            json!({"op":"advance","job_id":id})
+        )
+        .is_err(),
         "el informe no puede arrancar con la ronda abierta"
     );
     assert!(!dir.join(&id).join("report.json").exists());
@@ -228,7 +238,15 @@ fn invented_evidence_is_dropped_and_recorded_but_never_becomes_claim() {
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap();
     prepare_plan(&db, &repo, &m, &dir, id);
-    let archive = procesar(&db, &repo, &m, &dir, json!({"op":"advance","job_id":id})).unwrap();
+    let archive = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap();
     let artifact = archive["artifacts"]
         .as_array()
         .unwrap()
@@ -316,6 +334,7 @@ fn legacy_coverage_closed_job_can_continue_but_cancelled_job_cannot() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"continue_coverage","job_id":id}),
     )
@@ -323,11 +342,20 @@ fn legacy_coverage_closed_job_can_continue_but_cancelled_job_cannot() {
     assert_eq!(resumed["job"]["status"], "running");
     assert!(resumed["job"]["close_reason"].is_null());
     assert_eq!(m.calls.get(), 1);
-    procesar(&db, &repo, &m, &dir, json!({"op":"cancel","job_id":id})).unwrap();
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"cancel","job_id":id}),
+    )
+    .unwrap();
     assert!(procesar(
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"continue_coverage","job_id":id})
     )
@@ -416,6 +444,7 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         &db,
         &repo,
         &model,
+        None,
         &dir,
         json!({"op":"advance","job_id":id}),
     )
@@ -433,6 +462,7 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         &db,
         &repo,
         &model,
+        None,
         &dir,
         json!({"op":"advance","job_id":id}),
     )
@@ -466,11 +496,20 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         model.archive_inputs.borrow()[0],
         model.archive_inputs.borrow()[1]
     );
-    procesar(&db, &repo, &model, &dir, json!({"op":"pause","job_id":id})).unwrap();
+    procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"pause","job_id":id}),
+    )
+    .unwrap();
     assert!(procesar(
         &db,
         &repo,
         &model,
+        None,
         &dir,
         json!({"op":"update_budget","job_id":id,"max_llm_calls":1,"max_cost":1})
     )
@@ -479,6 +518,7 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         &db,
         &repo,
         &model,
+        None,
         &dir,
         json!({"op":"update_budget","job_id":id,"max_llm_calls":60,"max_cost":2}),
     )
@@ -491,11 +531,20 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         .unwrap()
         .iter()
         .any(|e| e["kind"] == "budget_updated"));
-    procesar(&db, &repo, &model, &dir, json!({"op":"resume","job_id":id})).unwrap();
+    procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"resume","job_id":id}),
+    )
+    .unwrap();
     let mut result = procesar(
         &db,
         &repo,
         &model,
+        None,
         &dir,
         json!({"op":"advance","job_id":id}),
     )
@@ -519,6 +568,7 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
                 &db,
                 &repo,
                 &model,
+                None,
                 &dir,
                 json!({"op":"decision","job_id":id,"gate_id":gate["id"],"approve":true}),
             )
@@ -528,6 +578,7 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
             &db,
             &repo,
             &model,
+            None,
             &dir,
             json!({"op":"advance","job_id":id}),
         )
@@ -563,6 +614,7 @@ fn garbage_archive_json_is_recorded_and_does_not_pause() {
         &db,
         &repo,
         &model,
+        None,
         &dir,
         json!({"op":"advance","job_id":id}),
     )
@@ -676,6 +728,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":[{"id":"q1","text":"x"}]})
     )
@@ -690,6 +743,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":[{"id":"inventada","text":"x"}]})
     )
@@ -699,6 +753,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":[{"id":"q1","text":"a"},{"id":"q1","text":"b"}]})
     )
@@ -712,6 +767,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":vacias})
     )
@@ -720,6 +776,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":[]})
     )
@@ -734,6 +791,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":parciales}),
     )
@@ -744,6 +802,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         &db,
         &repo,
         &m,
+        None,
         &dir,
         json!({"op":"answer","job_id":id,"answers":respuestas(&questions)})
     )
@@ -852,8 +911,8 @@ fn la_modalidad_perfila_la_ronda_y_queda_declarada_en_el_informe() {
         questions: 0,
     };
     // Una modalidad que no está en la tabla no crea el job.
-    assert!(procesar(&db,&repo,&m,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"biografia-inventada"})).is_err());
-    let s = procesar(&db,&repo,&m,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"cronologia"})).unwrap();
+    assert!(procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"biografia-inventada"})).is_err());
+    let s = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"cronologia"})).unwrap();
     let id = s["job"]["id"].as_str().unwrap().to_owned();
     step(&db, &repo, &m, &dir, &id);
     step(&db, &repo, &m, &dir, &id);
@@ -901,8 +960,16 @@ fn revisar_el_plan_reabre_la_ronda_de_preguntas() {
         .rfind(|a| a["kind"] == "plan" && a["obsolete"] == false)
         .unwrap()["id"]
         .clone();
-    procesar(&db, &repo, &m, &dir, json!({"op":"pause","job_id":id})).unwrap();
-    let revisado = procesar(&db,&repo,&m,&dir,json!({"op":"revise","job_id":id,"artifact_id":plan,"content":{"queries":["paro"],"bibliography_queries":[],"retrieval_limit":5}})).unwrap();
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"pause","job_id":id}),
+    )
+    .unwrap();
+    let revisado = procesar(&db,&repo,&m,None,&dir,json!({"op":"revise","job_id":id,"artifact_id":plan,"content":{"queries":["paro"],"bibliography_queries":[],"retrieval_limit":5}})).unwrap();
     assert_eq!(revisado["job"]["phase"], "clarification");
     // La ronda anterior quedó obsoleta: el encuadre se vuelve a preguntar.
     assert!(revisado["artifacts"]
@@ -945,5 +1012,149 @@ fn la_degradacion_de_un_rol_llega_al_informe_en_vez_de_quedar_solo_en_los_evento
     assert!(
         md.contains("**Degradación del pipeline:**"),
         "el informe tiene que declarar que el encuadre lo completó el código:\n{md}"
+    );
+}
+
+/// Embedder de prueba: vector fijo, alineado con los embeddings del corpus
+/// sintético, para ejercitar la pierna semántica sin salir a la red.
+struct EmbedFijo;
+impl entropia_agent::recuperacion::Embedder for EmbedFijo {
+    fn embed(&self, _: &str) -> Result<Vec<f32>, String> {
+        Ok(vec![1.0, 0.0])
+    }
+}
+
+/// Reranker de prueba: conserva el orden de la fusión.
+struct RerankIdentidad;
+impl entropia_agent::recuperacion::Reranker for RerankIdentidad {
+    fn rerank(&self, _: &str, docs: &[String], limite: usize) -> Result<Vec<(usize, f64)>, String> {
+        Ok((0..docs.len().min(limite)).map(|i| (i, 1.0)).collect())
+    }
+}
+
+/// Corre la investigación entera con el recuperador dado, respondiendo la
+/// ronda cuando frena.
+fn correr_con(
+    db: &EstadoDb,
+    repo: &RepositorioSqlite,
+    m: &Model,
+    rec: Option<&entropia_agent::recuperacion::Recuperador>,
+    dir: &std::path::Path,
+    id: &str,
+) -> Value {
+    let mut out = procesar(db, repo, m, rec, dir, json!({"op":"get","job_id":id})).unwrap();
+    for _ in 0..60 {
+        match out["job"]["status"].as_str() {
+            Some("done") => return out,
+            Some("awaiting_human") => {
+                let answers = respuestas(&round_questions(&out));
+                out = procesar(
+                    db,
+                    repo,
+                    m,
+                    rec,
+                    dir,
+                    json!({"op":"answer","job_id":id,"answers":answers}),
+                )
+                .unwrap();
+            }
+            _ => {
+                out = procesar(db, repo, m, rec, dir, json!({"op":"advance","job_id":id})).unwrap()
+            }
+        }
+    }
+    panic!("la investigación no cerró: {}", out["job"]["status"]);
+}
+
+#[test]
+fn con_recuperador_la_evidencia_sale_del_pipeline_hibrido_y_del_recorte() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("hibrida-artifacts");
+    let m = Model {
+        calls: Cell::new(0),
+        invent: false,
+        block: false,
+        questions: 4,
+    };
+    let rec = entropia_agent::recuperacion::Recuperador::con_clientes(
+        Box::new(EmbedFijo),
+        Box::new(RerankIdentidad),
+    );
+    let s = procesar(&db,&repo,&m,Some(&rec),&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0})).unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr_con(&db, &repo, &m, Some(&rec), &dir, &id);
+
+    // El evento de consulta declara con qué pipeline se buscó.
+    let consultas: Vec<&Value> = out["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "query")
+        .collect();
+    assert!(!consultas.is_empty());
+    assert!(consultas
+        .iter()
+        .all(|e| e["payload"]["pipeline"] == "hibrida"));
+
+    // Con las dos piernas y el rerank no hay nada que declarar.
+    assert!(!out["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "retrieval_degraded"));
+
+    // Toda la evidencia pertenece al recorte que el investigador eligió.
+    let evidencia = artefacto(&out, "archive")["evidence"].clone();
+    let filas = evidencia.as_array().unwrap();
+    assert!(!filas.is_empty(), "la recuperación híbrida no trajo nada");
+    for f in filas {
+        assert_eq!(f["collection_id"], "c-conflicto", "{f}");
+    }
+
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(
+        !md.contains("solo léxica"),
+        "no hubo degradación que declarar"
+    );
+}
+
+#[test]
+fn sin_recuperador_el_informe_declara_que_busco_solo_por_lexico() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("lexica-artifacts");
+    let m = Model {
+        calls: Cell::new(0),
+        invent: false,
+        block: false,
+        questions: 4,
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    assert!(out["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "retrieval_degraded"));
+    let informe = artefacto(&out, "report");
+    assert!(
+        informe["role_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["role"] == "recuperacion"),
+        "{}",
+        informe["role_warnings"]
+    );
+    // Y el investigador lo lee en el documento, no en un log.
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(
+        md.contains("**Degradación del pipeline:** recuperación solo léxica"),
+        "{md}"
     );
 }
