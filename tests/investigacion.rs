@@ -1710,3 +1710,102 @@ fn una_fecha_imprecisa_se_declara_imprecisa() {
     let md = entropia_agent::informe_render::render(&artefacto);
     assert!(md.contains("1961 (año)"), "{md}");
 }
+
+#[test]
+fn la_ronda_no_se_puede_cerrar_aprobando_el_gate() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("gate-ronda-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let abierta = step(&db, &repo, &m, &dir, &id);
+    assert_eq!(abierta["job"]["status"], "awaiting_human");
+
+    // Aprobar el gate de la ronda dejaba el job en `running` sobre una etapa
+    // que no puede avanzar: cualquier conductor que reintente mientras siga
+    // corriendo gira en vacío para siempre.
+    let gate = abierta["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["status"] == "pending")
+        .unwrap()["id"]
+        .clone();
+    let error = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"decision","job_id":id,"gate_id":gate,"approve":true}),
+    )
+    .expect_err("la ronda no se aprueba, se responde");
+    assert!(error.contains("answer"), "{error}");
+    assert_eq!(
+        procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap()["job"]
+            ["status"],
+        "awaiting_human"
+    );
+}
+
+#[test]
+fn una_ronda_abierta_estaciona_el_job_en_vez_de_girar_en_vacio() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("giro-state.sqlite");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let dir = path.with_extension("giro-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+
+    // Se fuerza el estado que producía el cuelgue: gate aprobado a mano y job
+    // corriendo con la ronda todavía sin responder.
+    drop(db);
+    {
+        let conn = rusqlite::Connection::open(&state).unwrap();
+        conn.execute(
+            "UPDATE human_decisions SET decision='approved' WHERE job_id=?1 AND decision='pending'",
+            [&id],
+        )
+        .unwrap();
+    }
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"resume","job_id":id}),
+    )
+    .unwrap();
+
+    let out = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap();
+    assert_eq!(
+        out["job"]["status"], "awaiting_human",
+        "el job tiene que estacionarse, no quedar corriendo sin progreso"
+    );
+    assert!(out["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "clarification_pending"));
+}

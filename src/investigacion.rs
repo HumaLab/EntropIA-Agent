@@ -324,7 +324,14 @@ pub fn procesar(
             "decision" => {
                 let gate = required(&request,"gate_id")?;
                 let approve = request["approve"].as_bool().ok_or("Falta approve booleano")?;
-                let artifact: String = e.db.conn().query_row("SELECT h.stage_id FROM human_decisions h JOIN artifacts a ON a.id=h.stage_id WHERE h.id=?1 AND h.job_id=?2 AND h.obsolete=0 AND a.obsolete=0 AND h.decision='pending'", params![gate,id], |r|r.get(0)).map_err(|_|"El gate no está pendiente o quedó obsoleto")?;
+                let (artifact, kind): (String, String) = e.db.conn().query_row("SELECT h.stage_id,a.tipo FROM human_decisions h JOIN artifacts a ON a.id=h.stage_id WHERE h.id=?1 AND h.job_id=?2 AND h.obsolete=0 AND a.obsolete=0 AND h.decision='pending'", params![gate,id], |r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|"El gate no está pendiente o quedó obsoleto")?;
+                // La ronda de preguntas no es un gate de aprobar o rechazar:
+                // aprobarla sin respuestas dejaba el job en `running` sobre una
+                // etapa que no puede avanzar, y un conductor que reintenta
+                // mientras el job siga corriendo queda girando para siempre.
+                if kind == "clarification_round" {
+                    return Err("La ronda de preguntas se resuelve respondiéndola (op «answer»), no aprobando el gate".into());
+                }
                 e.db.conn().execute("UPDATE human_decisions SET decision=?1,timestamp=?2 WHERE id=?3",params![if approve {"approved"} else {"rejected"},ahora(),gate]).map_err(err)?;
                 e.event(id,"gate_decided",json!({"gate_id":gate,"artifact_id":artifact,"approve":approve}))?;
                 e.status(id, if approve && e.require_gates(id).is_ok() {"running"} else {"awaiting_human"})?;
@@ -1125,6 +1132,21 @@ impl Engine<'_> {
         let Some(round) = rounds.iter().rev().find(|r| r["answers"].is_array()) else {
             if rounds.is_empty() {
                 self.ask_clarification(id, perfil)?;
+                return Ok(None);
+            }
+            // Ronda abierta y sin responder: la etapa no puede avanzar. El job
+            // se estaciona en vez de quedar `running` sobre un paso que no
+            // progresa, que es lo que haría girar en vacío a cualquier
+            // conductor que reintente mientras el estado sea `running`.
+            if self.job_status(id)? == "running" {
+                self.transaction(|| {
+                    self.status(id, "awaiting_human")?;
+                    self.event(
+                        id,
+                        "clarification_pending",
+                        json!({"error":"la ronda sigue sin respuestas: el job no puede avanzar"}),
+                    )
+                })?;
             }
             return Ok(None);
         };
