@@ -6,6 +6,10 @@
 //! rag_chunks_fts) para que las consultas SQL del código publicado corran
 //! contra datos realistas y deterministas.
 
+// Cada binario de test compila este módulo por separado y usa solo una
+// parte de los helpers: lo que otro test necesita no es código muerto.
+#![allow(dead_code)]
+
 use rusqlite::Connection;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -221,4 +225,86 @@ CREATE TABLE _migrations (
     .unwrap();
 
     path
+}
+
+/// Doble de LLM que responde los contratos JSON de cada rol del workflow.
+///
+/// Existe para ejercitar el motor completo sin red y sin depender de la
+/// conducta de ningún proveedor: lo que se prueba con él es la maquinaria
+/// —recuperación, lotes, span check, citas, cobertura—, no el juicio del
+/// modelo.
+pub struct LlmGuionado {
+    pub consultas: Vec<String>,
+}
+
+impl entropia_agent::cliente_llm::ClienteLlm for LlmGuionado {
+    fn modelo(&self) -> &str {
+        "fake/guionado"
+    }
+
+    fn ultimo_costo(&self) -> Option<f64> {
+        Some(0.001)
+    }
+
+    fn turno_agente(
+        &self,
+        mensajes: &[serde_json::Value],
+        _: &[serde_json::Value],
+    ) -> Result<entropia_agent::cliente_llm::TurnoAgente, String> {
+        use serde_json::json;
+        let sistema = mensajes[0]["content"].as_str().unwrap_or_default();
+        let usuario = mensajes[1]["content"].as_str().unwrap_or_default();
+        // El verificador manda prosa, no JSON.
+        let datos: serde_json::Value =
+            serde_json::from_str(usuario).unwrap_or(serde_json::Value::Null);
+
+        let salida = if sistema.contains("Rol: prospeccion.") {
+            json!({"sufficient":true,"rationale":"El recorte tiene material procesado","gaps":[]})
+        } else if sistema.contains("{hypothesis:") {
+            json!({"hypothesis":"Hubo conflictividad gremial","scope":"recorte seleccionado","closing_criteria":["Agotar la evidencia recuperada"]})
+        } else if sistema.contains("{questions:") {
+            json!({"questions":(1..=4).map(|i| json!({
+                "id": format!("q{i}"), "axis": "Período",
+                "text": format!("Pregunta {i}"), "rationale": "Cambia el plan"
+            })).collect::<Vec<_>>()})
+        } else if sistema.contains("{queries:") {
+            json!({"queries":self.consultas,"bibliography_queries":[],"retrieval_limit":16})
+        } else if sistema.contains("Rol: asistente_archivo.") {
+            // Un claim por ítem de evidencia, citando un pasaje literal.
+            let claims: Vec<serde_json::Value> = datos["evidence"]
+                .as_array()
+                .map(|e| e.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .take(3)
+                .enumerate()
+                .map(|(i, e)| {
+                    let texto = e["text"].as_str().unwrap_or_default();
+                    // Pasaje literal: una ventana en frontera de carácter.
+                    let pasaje: String = texto.chars().skip(10).take(40).collect();
+                    json!({
+                        "id": format!("c{}", i + 1),
+                        "text": format!("El documento {} registra actividad gremial", i + 1),
+                        "evidence_ids": [e["id"].clone()],
+                        "quotes": [{"evidence_id": e["id"].clone(), "quote": pasaje}],
+                        "interpretative": false
+                    })
+                })
+                .collect();
+            json!({"summary":"Síntesis del lote","claims":claims,"limitations":[]})
+        } else if sistema.contains("Rol: asistente_bibliografia.") {
+            json!({"references":[],"synthesis":"Sin consultas bibliográficas"})
+        } else if sistema.contains("Sos el Verificador de EntropIA.") {
+            json!({"estado":"supported","rationale":"El pasaje sostiene la afirmación","error_kind":null})
+        } else {
+            let ids: Vec<serde_json::Value> = datos["claims"]
+                .as_array()
+                .map(|c| c.iter().map(|c| c["id"].clone()).collect())
+                .unwrap_or_default();
+            json!({"title":"Informe","sections":[{"title":"Hechos","text":"Síntesis de la evidencia verificada.","claim_ids":ids}]})
+        };
+        Ok(entropia_agent::cliente_llm::TurnoAgente::Texto(
+            salida.to_string(),
+        ))
+    }
 }
