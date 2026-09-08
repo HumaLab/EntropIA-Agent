@@ -26,7 +26,6 @@ pub mod informe_render;
 pub mod informe_secciones;
 pub mod investigacion;
 pub mod memoria;
-pub mod orquestador;
 pub mod paper;
 pub mod perfiles;
 pub mod prompts;
