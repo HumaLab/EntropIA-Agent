@@ -197,6 +197,10 @@ struct Citation {
     evidence_id: String,
     #[serde(default)]
     chunk_id: String,
+    /// Item del corpus al que pertenece: es lo que permite abrir el documento
+    /// desde la cita sin adivinar por el título.
+    #[serde(default)]
+    item_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     collection: Option<String>,
     #[serde(default)]
@@ -2063,6 +2067,7 @@ fn cita(n: usize, row: &Value, collections: &Value, con_texto: bool) -> Citation
     Citation {
         n,
         evidence_id: row["id"].as_str().unwrap_or_default().to_string(),
+        item_id: row["item_id"].as_str().unwrap_or_default().to_string(),
         chunk_id: row["chunk_id"]
             .as_str()
             .or_else(|| row["id"].as_str())
