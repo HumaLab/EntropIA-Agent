@@ -2,11 +2,13 @@
 //! Model inputs and outputs are data; only the state machine authorizes transitions.
 use crate::{
     cliente_llm::{ClienteLlm, TurnoAgente},
+    dominio::EstadoEpistemico,
     estado::{ahora, nuevo_id, EstadoDb},
     perfiles::{self, Perfil},
     recuperacion::Recuperador,
     repositorio::{fts5_query, RepositorioSqlite},
     trabajos::{ConfigJob, MotorTrabajos},
+    verificador::{EvidenciaConTexto, ModoVerificacion, Verificador},
 };
 use rusqlite::{params, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -81,6 +83,23 @@ struct Clarification {
     #[serde(default)]
     questions: Vec<Question>,
 }
+/// Pasaje de la evidencia que sostiene un claim.
+///
+/// El modelo aporta `quote`; los offsets los calcula el código buscando esa
+/// cadena en el texto de la evidencia. `span_start` en `None` significa que la
+/// cita **no está** en la fuente: no se descarta en silencio, viaja así hasta
+/// la verificación, que la declara `unverifiable` con `ref_conflict`.
+#[derive(Default, Clone, Serialize, Deserialize)]
+struct Quote {
+    #[serde(default)]
+    evidence_id: String,
+    #[serde(default)]
+    quote: String,
+    #[serde(default)]
+    span_start: Option<i64>,
+    #[serde(default)]
+    span_end: Option<i64>,
+}
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct Claim {
     /// Ausente en la salida del modelo → cadena vacía: la partición lo
@@ -91,6 +110,10 @@ struct Claim {
     text: String,
     #[serde(default)]
     evidence_ids: Vec<String>,
+    /// Pasajes literales que sostienen el claim. Sin ellos el span check del
+    /// verificador no tiene nada que verificar.
+    #[serde(default)]
+    quotes: Vec<Quote>,
     #[serde(default)]
     interpretative: bool,
 }
@@ -126,6 +149,9 @@ struct Judgment {
     rationale: String,
     #[serde(default)]
     evidence_ids: Vec<String>,
+    /// Taxonomía de error del verificador: `ref_conflict`, `knowledge_lack`, …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_kind: Option<String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Verification {
@@ -629,13 +655,11 @@ impl Engine<'_> {
         }
         Ok(json!({"sources":sources}))
     }
-    fn call<T: DeserializeOwned + Default>(
-        &self,
-        id: &str,
-        role: &str,
-        contract: &str,
-        data: Value,
-    ) -> Result<T, String> {
+    /// Reserva presupuesto y abre el registro de la llamada.
+    ///
+    /// Toda llamada al modelo pasa por acá, no solo las de `call`: una que se
+    /// contabilice sola gasta presupuesto invisible.
+    fn abrir_llamada(&self, id: &str, role: &str) -> Result<String, String> {
         let summary = self.summary(id)?;
         if summary["llm_calls"].as_i64() >= summary["max_llm_calls"].as_i64() {
             return Err("Presupuesto de llamadas agotado".into());
@@ -650,6 +674,46 @@ impl Engine<'_> {
             "INSERT INTO llm_calls(id,job_id,rol,modelo,error,created_at) VALUES(?1,?2,?3,?4,'interrupted',?5)",
             params![call, id, role, self.llm.modelo(), ahora()],
         ).map_err(err)?;
+        Ok(call)
+    }
+
+    /// Cierra el registro y acumula el costo reportado por el proveedor.
+    fn cerrar_llamada(
+        &self,
+        id: &str,
+        call: &str,
+        error: Option<&String>,
+        cost: Option<f64>,
+    ) -> Result<(), String> {
+        self.transaction(|| {
+            self.db
+                .conn()
+                .execute(
+                    "UPDATE llm_calls SET error=?1,costo=?2 WHERE id=?3",
+                    params![error, cost, call],
+                )
+                .map_err(err)?;
+            if let Some(cost) = cost {
+                self.db
+                    .conn()
+                    .execute(
+                        "UPDATE jobs SET costo_acumulado=costo_acumulado+?1 WHERE id=?2",
+                        params![cost, id],
+                    )
+                    .map_err(err)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn call<T: DeserializeOwned + Default>(
+        &self,
+        id: &str,
+        role: &str,
+        contract: &str,
+        data: Value,
+    ) -> Result<T, String> {
+        let call = self.abrir_llamada(id, role)?;
         let input = json!({"role": role, "contract": contract, "data": data});
         self.transaction(|| {
             self.artifact(id, &format!("input_{role}"), &input, false)?;
@@ -693,25 +757,7 @@ impl Engine<'_> {
             }
             Err(e) => Err(e),
         };
-        self.transaction(|| {
-            self.db
-                .conn()
-                .execute(
-                    "UPDATE llm_calls SET error=?1,costo=?2 WHERE id=?3",
-                    params![parsed.as_ref().err(), cost, call],
-                )
-                .map_err(err)?;
-            if let Some(cost) = cost {
-                self.db
-                    .conn()
-                    .execute(
-                        "UPDATE jobs SET costo_acumulado=costo_acumulado+?1 WHERE id=?2",
-                        params![cost, id],
-                    )
-                    .map_err(err)?;
-            }
-            Ok(())
-        })?;
+        self.cerrar_llamada(id, &call, parsed.as_ref().err(), cost)?;
         parsed
     }
 
@@ -1150,7 +1196,7 @@ impl Engine<'_> {
                 self.call(
                     id,
                     "asistente_archivo",
-                    &format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim),
+                    &format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],quotes:[{{evidence_id:string,quote:string}}],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id, y quotes con el pasaje LITERAL de evidence[].text que lo sostiene, copiado carácter por carácter sin resumir ni corregir. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim),
                     input.clone(),
                 )?
             };
@@ -1203,12 +1249,32 @@ impl Engine<'_> {
                             }
                         }
                     }
+                    // Los pasajes se ubican en el texto de su evidencia. Una
+                    // cita que no está no se descarta en silencio: viaja con
+                    // span vacío y la verificación la declara ref_conflict.
+                    let quotes = claim
+                        .quotes
+                        .iter()
+                        .filter_map(|q| {
+                            let index = allowed.iter().position(|e| e["id"] == q.evidence_id)?;
+                            let fuente = supplied.get(index)?;
+                            let (span_start, span_end) =
+                                localizar(fuente["text"].as_str().unwrap_or(""), &q.quote);
+                            Some(Quote {
+                                evidence_id: fuente["id"].as_str().unwrap_or_default().to_string(),
+                                quote: q.quote.clone(),
+                                span_start,
+                                span_end,
+                            })
+                        })
+                        .collect();
                     match invalid {
                         Some(reference) => dropped.push(json!({"id":claim.id,"reason":format!("referencia '{reference}' no suministrada en el lote")})),
                         None => accepted.push(Claim {
                             id: format!("{prefix}{}", claim.id),
                             text: claim.text,
                             evidence_ids: mapped,
+                            quotes,
                             interpretative: claim.interpretative,
                         }),
                     }
@@ -1257,6 +1323,111 @@ impl Engine<'_> {
         ))
     }
 
+    /// Juzga cada claim con el protocolo aislado del `Verificador`: span check
+    /// determinista sobre el pasaje citado, entailment después.
+    ///
+    /// Es un claim por llamada, no un lote. Ese es el costo del aislamiento: un
+    /// verificador que ve todos los claims juntos se vuelve consistente consigo
+    /// mismo en vez de con la evidencia. Cuando el presupuesto se agota la
+    /// verificación **no se saltea**: sigue con el span check y el entailment
+    /// determinista, y lo declara.
+    fn juzgar(
+        &self,
+        id: &str,
+        claims: &[Claim],
+        evidencia: &[Value],
+    ) -> Result<Vec<Judgment>, String> {
+        let textos: HashMap<&str, &str> = evidencia
+            .iter()
+            .filter_map(|e| Some((e["id"].as_str()?, e["text"].as_str().unwrap_or(""))))
+            .collect();
+        let cobertura = self.repo.cobertura();
+        let agotado = LlmAgotado;
+        let mut sin_presupuesto = false;
+        let mut out = Vec::new();
+        for claim in claims {
+            // Sin pasaje no hay span check posible: verificar una cita vacía
+            // contra su fuente pasa siempre, y un guardrail que nunca falla es
+            // peor que ninguno.
+            if claim.quotes.is_empty() {
+                out.push(Judgment {
+                    id: claim.id.clone(),
+                    status: Some(Epistemic::Unverifiable),
+                    rationale: "el archivo no declaró ningún pasaje que sostenga la afirmación"
+                        .into(),
+                    evidence_ids: claim.evidence_ids.clone(),
+                    error_kind: Some("knowledge_lack".into()),
+                });
+                continue;
+            }
+            let lote: Vec<EvidenciaConTexto> = claim
+                .quotes
+                .iter()
+                .map(|q| EvidenciaConTexto {
+                    id: q.evidence_id.clone(),
+                    quote: q.quote.clone(),
+                    // Sin offsets el span check falla, que es lo correcto: la
+                    // cita no se pudo ubicar en la fuente.
+                    span_start: q.span_start.unwrap_or(-1),
+                    span_end: q.span_end.unwrap_or(-1),
+                    texto_fuente: textos
+                        .get(q.evidence_id.as_str())
+                        .copied()
+                        .unwrap_or_default()
+                        .to_string(),
+                    relacion: "supports".into(),
+                })
+                .collect();
+            let modo = if claim.interpretative {
+                ModoVerificacion::Interpretativo
+            } else {
+                ModoVerificacion::Factual
+            };
+            let resultado = match self.abrir_llamada(id, "asistente_validador") {
+                Ok(call) => {
+                    self.transaction(|| {
+                        self.artifact(id,"input_asistente_validador",&json!({"claim":claim.text,"quotes":claim.quotes,"modo":format!("{modo:?}")}),false)?;
+                        Ok(())
+                    })?;
+                    let r = Verificador::nuevo(self.llm).verificar(
+                        &claim.text,
+                        &lote,
+                        modo,
+                        Some(&cobertura),
+                    );
+                    let costo = self.llm.ultimo_costo();
+                    self.cerrar_llamada(id, &call, r.as_ref().err(), costo)?;
+                    r?
+                }
+                Err(_) => {
+                    sin_presupuesto = true;
+                    Verificador::nuevo(&agotado).verificar(
+                        &claim.text,
+                        &lote,
+                        modo,
+                        Some(&cobertura),
+                    )?
+                }
+            };
+            out.push(Judgment {
+                id: claim.id.clone(),
+                status: Some(epistemico(resultado.estado)),
+                rationale: resultado.rationale,
+                evidence_ids: resultado
+                    .evidencia_considerada
+                    .split(',')
+                    .filter(|e| !e.trim().is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                error_kind: resultado.error_kind,
+            });
+        }
+        if sin_presupuesto {
+            self.transaction(|| self.event(id,"role_warning",json!({"role":"asistente_validador","error":"presupuesto agotado: la verificación siguió con span check y entailment determinista, sin juicio del modelo"})))?;
+        }
+        Ok(out)
+    }
+
     fn verification_step(&self, id: &str) -> Result<Option<Value>, String> {
         let mut archives = self.checkpoints(id, "archive_batch")?;
         if archives.is_empty() {
@@ -1268,49 +1439,10 @@ impl Engine<'_> {
         if completed.len() < archives.len() {
             let a = &archives[completed.len()];
             let claims: Vec<Claim> = decode(a["claims"].clone()).unwrap_or_default();
-            let result = if claims.is_empty() {
-                Verification { claims: vec![] }
-            } else {
-                self.call::<Verification>(
-                    id,
-                    "asistente_validador",
-                    "{claims:[{id:string,status:supported|partially_supported|contradicted|unverifiable,rationale:string,evidence_ids:string[]}]}; juzga todos los claims recibidos copiando sus IDs EXACTAMENTE. Sin síntesis del productor ni conocimiento externo. Factual: entailment; interpretativo: suficiencia, cobertura y alternativas.",
-                    json!({"claims":claims,"evidence":a["evidence"],"coverage":self.current(id,"coverage")?}),
-                )?
-            };
-            let mut by_id = HashMap::new();
-            for judgment in result.claims {
-                by_id.entry(judgment.id.clone()).or_insert(judgment);
-            }
-            let filled: Vec<Judgment> = claims
-                .iter()
-                .map(|c| match by_id.remove(&c.id) {
-                    Some(j)
-                        if j.status.is_some()
-                            && !j.rationale.trim().is_empty()
-                            && j.evidence_ids.iter().all(|e| c.evidence_ids.contains(e)) =>
-                    {
-                        j
-                    }
-                    Some(j) => Judgment {
-                        id: c.id.clone(),
-                        status: Some(Epistemic::Unverifiable),
-                        rationale: if j.rationale.trim().is_empty() {
-                            "sin justificación parseable; se declara no verificable".into()
-                        } else {
-                            j.rationale
-                        },
-                        evidence_ids: c.evidence_ids.clone(),
-                    },
-                    None => Judgment {
-                        id: c.id.clone(),
-                        status: Some(Epistemic::Unverifiable),
-                        rationale: "sin juicio usable; se declara no verificable".into(),
-                        evidence_ids: c.evidence_ids.clone(),
-                    },
-                })
-                .collect();
-            let value = json!(Verification { claims: filled });
+            let evidencia = a["evidence"].as_array().cloned().unwrap_or_default();
+            let value = json!(Verification {
+                claims: self.juzgar(id, &claims, &evidencia)?
+            });
             self.transaction(|| {
                 self.artifact(id, "verification_batch", &value, false)?;
                 self.event(
@@ -1356,6 +1488,40 @@ fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
 fn decode<T: DeserializeOwned>(v: Value) -> Result<T, String> {
     serde_json::from_value(v).map_err(err)
 }
+/// Cliente nulo: fuerza al verificador a su camino determinista cuando el
+/// presupuesto del job se agotó. La verificación no se saltea, se degrada.
+struct LlmAgotado;
+impl ClienteLlm for LlmAgotado {
+    fn turno_agente(&self, _: &[Value], _: &[Value]) -> Result<TurnoAgente, String> {
+        Err("presupuesto del job agotado".into())
+    }
+    fn modelo(&self) -> &str {
+        "sin-modelo"
+    }
+}
+
+fn epistemico(estado: EstadoEpistemico) -> Epistemic {
+    match estado {
+        EstadoEpistemico::Supported => Epistemic::Supported,
+        EstadoEpistemico::PartiallySupported => Epistemic::PartiallySupported,
+        EstadoEpistemico::Contradicted => Epistemic::Contradicted,
+        EstadoEpistemico::Unverifiable => Epistemic::Unverifiable,
+    }
+}
+
+/// Ubica el pasaje dentro del texto de su evidencia, en offsets de carácter.
+/// `None` significa que la cita no está literalmente en la fuente.
+fn localizar(texto: &str, quote: &str) -> (Option<i64>, Option<i64>) {
+    if quote.trim().is_empty() {
+        return (None, None);
+    }
+    let Some(byte) = texto.find(quote) else {
+        return (None, None);
+    };
+    let inicio = texto[..byte].chars().count() as i64;
+    (Some(inicio), Some(inicio + quote.chars().count() as i64))
+}
+
 fn request_answers(request: &Value) -> Result<&Vec<Value>, String> {
     request["answers"]
         .as_array()

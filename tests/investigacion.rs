@@ -14,6 +14,10 @@ struct Model {
     /// Preguntas que devuelve la ronda de clarificación. Por debajo de cuatro
     /// el código tiene que completar con los ejes de la modalidad.
     questions: usize,
+    /// El archivo cita un pasaje que no está en la fuente.
+    quote_falsa: bool,
+    /// El archivo no declara ningún pasaje.
+    sin_pasajes: bool,
 }
 impl ClienteLlm for Model {
     fn modelo(&self) -> &str {
@@ -25,7 +29,9 @@ impl ClienteLlm for Model {
     fn turno_agente(&self, m: &[Value], _: &[Value]) -> Result<TurnoAgente, String> {
         self.calls.set(self.calls.get() + 1);
         let s = m[0]["content"].as_str().unwrap();
-        let data: Value = serde_json::from_str(m[1]["content"].as_str().unwrap()).unwrap();
+        // El verificador manda prosa («AFIRMACIÓN: … EVIDENCIA: …»), no JSON.
+        let data: Value =
+            serde_json::from_str(m[1]["content"].as_str().unwrap()).unwrap_or(Value::Null);
         let output = if s.contains("Rol: prospeccion.") {
             json!({"sufficient":!self.block,"rationale":"Juicio sobre el alcance documental","gaps":if self.block {vec!["1967-1970 sin cobertura identificada"]} else {vec![]}})
         } else if s.contains("{hypothesis:") {
@@ -45,8 +51,27 @@ impl ClienteLlm for Model {
             json!({"queries":["huelga","asamblea"],"bibliography_queries":[],"retrieval_limit":10})
         } else if s.contains("{queries:") {
             json!({"queries":["huelga"],"bibliography_queries":[],"retrieval_limit":10})
+        } else if s.contains("Sos el Verificador de EntropIA.") {
+            // Protocolo aislado: el verificador nunca ve la síntesis previa.
+            let prosa = m[1]["content"].as_str().unwrap();
+            assert!(
+                !prosa.contains("Síntesis"),
+                "el verificador vio la síntesis del productor"
+            );
+            json!({"estado":"supported","rationale":"El pasaje sostiene la afirmación","error_kind":null})
         } else if s.contains("Rol: asistente_archivo.") {
-            json!({"summary":"Síntesis","claims":[{"id":"c1","text":"Hubo una huelga","evidence_ids":[if self.invent {json!("foreign-evidence")}else{data["evidence"][0]["id"].clone()}],"interpretative":false}]})
+            let evidencia = data["evidence"][0]["id"].clone();
+            let pasaje = if self.quote_falsa {
+                json!("una frase que jamás estuvo en el documento")
+            } else {
+                json!("huelga general")
+            };
+            let quotes = if self.sin_pasajes {
+                json!([])
+            } else {
+                json!([{"evidence_id":evidencia,"quote":pasaje}])
+            };
+            json!({"summary":"Síntesis","claims":[{"id":"c1","text":"Hubo una huelga","evidence_ids":[if self.invent {json!("foreign-evidence")}else{data["evidence"][0]["id"].clone()}],"quotes":quotes,"interpretative":false}]})
         } else if s.contains("Rol: asistente_bibliografia.") {
             json!({"references":[],"synthesis":"Sin consultas bibliográficas solicitadas"})
         } else if s.contains("Rol: asistente_validador.") {
@@ -171,6 +196,8 @@ fn no_model_call_before_scope() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let dir = path.with_extension("artifacts");
     assert!(procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"q","project":"p","collection_ids":["c-volantes"],"max_llm_calls":20})).is_err());
@@ -190,6 +217,8 @@ fn la_ronda_de_preguntas_frena_el_informe_hasta_que_el_investigador_responde() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_string();
@@ -234,6 +263,8 @@ fn invented_evidence_is_dropped_and_recorded_but_never_becomes_claim() {
         invent: true,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap();
@@ -281,6 +312,8 @@ fn insufficient_prospection_is_recorded_and_the_job_continues() {
         invent: false,
         block: true,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -315,6 +348,8 @@ fn legacy_coverage_closed_job_can_continue_but_cancelled_job_cannot() {
         invent: false,
         block: true,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_string();
@@ -393,11 +428,20 @@ impl ClienteLlm for BoundedModel {
                     r#"{"summary":"Mixto","claims":[{"id":"bad","text":"Hecho","evidence_ids":["absent"],"interpretative":false},{"id":"C8","text":"No hay en el lote evidencia suficiente para las obreras","interpretative":true}]}"#.into(),
                 ));
             }
+            let data: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+            let evidencia = data["evidence"][0]["id"].clone();
+            let pasaje = data["evidence"][0]["text"]
+                .as_str()
+                .map(|t| t.chars().take(20).collect::<String>())
+                .unwrap_or_default();
+            return Ok(TurnoAgente::Texto(json!({"summary":"Síntesis","claims":[{"id":"c1","text":"Hubo organización obrera","evidence_ids":[evidencia.clone()],"quotes":[{"evidence_id":evidencia,"quote":pasaje}],"interpretative":false}]}).to_string()));
         }
-        if system.contains("Rol: asistente_validador.") {
+        if system.contains("Sos el Verificador de EntropIA.") {
             assert!(text.len() <= 52_000, "verification context is unbounded");
-            let data: Value = serde_json::from_str(text).unwrap();
-            return Ok(TurnoAgente::Texto(json!({"claims":data["claims"].as_array().unwrap().iter().map(|c|json!({"id":c["id"],"status":"supported","rationale":"Supported by supplied evidence","evidence_ids":c["evidence_ids"]})).collect::<Vec<_>>()}).to_string()));
+            return Ok(TurnoAgente::Texto(
+                json!({"estado":"supported","rationale":"El pasaje sostiene la afirmación","error_kind":null})
+                    .to_string(),
+            ));
         }
         if system.contains("Rol: asistente_redaccion.") {
             let data: Value = serde_json::from_str(text).unwrap();
@@ -430,6 +474,8 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &base, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -600,6 +646,8 @@ fn garbage_archive_json_is_recorded_and_does_not_pause() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &base, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -649,6 +697,8 @@ fn una_ronda_corta_se_completa_con_los_ejes_de_la_modalidad() {
         invent: false,
         block: false,
         questions: 1,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -683,6 +733,8 @@ fn las_respuestas_del_investigador_regeneran_el_plan() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -720,6 +772,8 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -820,6 +874,8 @@ fn el_informe_reproduce_los_fragmentos_literales_y_cierra_con_fuentes_citadas() 
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -884,6 +940,8 @@ fn sin_claims_verificados_el_informe_no_inventa_fuentes_citadas() {
         invent: true,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -909,6 +967,8 @@ fn la_modalidad_perfila_la_ronda_y_queda_declarada_en_el_informe() {
         invent: false,
         block: false,
         questions: 0,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     // Una modalidad que no está en la tabla no crea el job.
     assert!(procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"biografia-inventada"})).is_err());
@@ -946,6 +1006,8 @@ fn revisar_el_plan_reabre_la_ronda_de_preguntas() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -993,6 +1055,8 @@ fn la_degradacion_de_un_rol_llega_al_informe_en_vez_de_quedar_solo_en_los_evento
         invent: false,
         block: false,
         questions: 0,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -1077,6 +1141,8 @@ fn con_recuperador_la_evidencia_sale_del_pipeline_hibrido_y_del_recorte() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let rec = entropia_agent::recuperacion::Recuperador::con_clientes(
         Box::new(EmbedFijo),
@@ -1131,6 +1197,8 @@ fn sin_recuperador_el_informe_declara_que_busco_solo_por_lexico() {
         invent: false,
         block: false,
         questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -1157,4 +1225,152 @@ fn sin_recuperador_el_informe_declara_que_busco_solo_por_lexico() {
         md.contains("**Degradación del pipeline:** recuperación solo léxica"),
         "{md}"
     );
+}
+
+/// Juicio del claim `c1` en el artefacto de verificación.
+fn juicio(out: &Value) -> Value {
+    artefacto(out, "verification")["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["id"] == "c1")
+        .expect("c1 tiene que tener juicio")
+        .clone()
+}
+
+fn modelo(quote_falsa: bool, sin_pasajes: bool) -> Model {
+    Model {
+        calls: Cell::new(0),
+        invent: false,
+        block: false,
+        questions: 4,
+        quote_falsa,
+        sin_pasajes,
+    }
+}
+
+#[test]
+fn una_cita_que_no_esta_en_la_fuente_no_pasa_el_span_check() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("span-artifacts");
+    let m = modelo(true, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    // El archivo guarda el pasaje tal como lo dijo el modelo, pero sin
+    // posición: no está en la fuente.
+    let claim = artefacto(&out, "archive")["claims"][0].clone();
+    assert!(claim["quotes"][0]["span_start"].is_null(), "{claim}");
+
+    // Y la verificación lo declara, en vez de darlo por bueno.
+    let j = juicio(&out);
+    assert_eq!(j["status"], "unverifiable", "{j}");
+    assert_eq!(j["error_kind"], "ref_conflict", "{j}");
+
+    // Sin claim sostenido no hay nada que citar: el informe no inventa fuentes.
+    let informe = artefacto(&out, "report");
+    assert!(informe["report"]["references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(!md.contains("## Fuentes citadas"));
+}
+
+#[test]
+fn un_claim_sin_pasaje_declarado_no_se_da_por_verificado() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("sin-pasaje-artifacts");
+    let m = modelo(false, true);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+    let j = juicio(&out);
+    // Verificar una cita vacía contra su fuente pasaría siempre: el guardrail
+    // tiene que rechazar antes de llegar al span check.
+    assert_eq!(j["status"], "unverifiable", "{j}");
+    assert_eq!(j["error_kind"], "knowledge_lack", "{j}");
+    assert!(j["rationale"].as_str().unwrap().contains("ningún pasaje"));
+}
+
+#[test]
+fn con_pasaje_literal_el_claim_queda_sostenido_y_se_cita() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("span-ok-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    let claim = artefacto(&out, "archive")["claims"][0].clone();
+    assert_eq!(claim["quotes"][0]["quote"], "huelga general");
+    assert_eq!(claim["quotes"][0]["span_start"], 0);
+    assert_eq!(claim["quotes"][0]["span_end"], 14);
+
+    let j = juicio(&out);
+    assert_eq!(j["status"], "supported", "{j}");
+    assert!(j["error_kind"].is_null());
+    assert!(!artefacto(&out, "report")["report"]["references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn el_presupuesto_agotado_degrada_la_verificacion_en_vez_de_saltearla() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("presupuesto-artifacts");
+    let m = modelo(false, false);
+    // Alcanza para llegar a la verificación y no para pagarla.
+    let s = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":7,"max_cost":1.0})).unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let mut out = s;
+    for _ in 0..12 {
+        if out["job"]["status"] == "awaiting_human" {
+            let answers = respuestas(&round_questions(&out));
+            out = procesar(
+                &db,
+                &repo,
+                &m,
+                None,
+                &dir,
+                json!({"op":"answer","job_id":id,"answers":answers}),
+            )
+            .unwrap();
+            continue;
+        }
+        match procesar(
+            &db,
+            &repo,
+            &m,
+            None,
+            &dir,
+            json!({"op":"advance","job_id":id}),
+        ) {
+            Ok(v) => out = v,
+            Err(_) => break,
+        }
+    }
+    let out = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    // La verificación corrió igual, con span check y entailment determinista.
+    let j = juicio(&out);
+    assert!(j["status"].is_string(), "{j}");
+    assert!(out["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "role_warning"
+            && e["payload"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("presupuesto agotado")));
 }
