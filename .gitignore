@@ -4,3 +4,6 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# Cache local de herramientas del agente de desarrollo.
+/.atl/
