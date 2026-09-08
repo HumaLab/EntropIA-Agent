@@ -4,6 +4,7 @@ use crate::{
     cliente_llm::{ClienteLlm, TurnoAgente},
     dominio::{ClaseFuente, EstadoEpistemico, Ledger, RelacionEvidencia, TipoClaim},
     estado::{ahora, nuevo_id, EstadoDb},
+    memoria::{MemoriaDb, TipoMemoria},
     perfiles::{self, Perfil},
     recuperacion::Recuperador,
     repositorio::{fts5_query, RepositorioSqlite},
@@ -796,8 +797,8 @@ impl Engine<'_> {
             1 => {
                 let o: Design = self.call(
                     id, "investigador_principal",
-                    "{hypothesis:string,scope:string,closing_criteria:string[]}; diseñar investigación, nunca chunks crudos",
-                    json!({"request":request,"coverage":self.current(id,"coverage")?,"prospection":self.current(id,"prospection")?}),
+                    "{hypothesis:string,scope:string,closing_criteria:string[]}; diseñar investigación, nunca chunks crudos. memory son hallazgos de investigaciones previas de este proyecto: contexto de trabajo, NUNCA evidencia. Ninguna afirmación del informe puede apoyarse en ellos; sirven para no repetir lo hecho y para situar la pregunta.",
+                    json!({"request":request,"coverage":self.current(id,"coverage")?,"prospection":self.current(id,"prospection")?,"memory":self.memoria_previa(id)?}),
                 )?;
                 let o = if validate_design(&o).is_ok() {
                     o
@@ -900,6 +901,7 @@ impl Engine<'_> {
                     &a["limitations"],
                 );
                 cite_report(&mut o, &claims, &a["evidence"], &self.collections());
+                self.recordar(id, &supplied)?;
                 (
                     "report",
                     json!({"report":o,"coverage":self.current(id,"coverage")?,"coverage_warning":self.current(id,"prospection")?,"archive_limitations":a["limitations"],"dropped_claims":a["dropped"],"role_warnings":self.role_warnings(id)?,"verification":v,"bibliography":self.current(id,"bibliography")?,"clarification":clarification,"profile":{"id":perfil.id,"name":perfil.nombre,"bias":perfil.sesgo_declarado}}),
@@ -1134,8 +1136,8 @@ impl Engine<'_> {
         let ejes = perfil.ejes_pregunta.join(" | ");
         let round: Clarification = self.call(
             id, "investigador_principal",
-            &format!("{{questions:[{{id:string,axis:string,text:string,rationale:string}}]}}; al menos {PREGUNTAS_MINIMAS} preguntas al investigador, una por eje, precisas y respondibles en pocas líneas. No preguntes lo que el corpus ya contesta: preguntá lo que cambia el plan. Ejes de esta modalidad: {ejes}"),
-            json!({"request":self.current(id,"request")?,"coverage":self.current(id,"coverage")?,"prospection":self.current(id,"prospection")?,"design":self.current(id,"design")?,"plan":self.current(id,"plan")?,"profile":{"id":perfil.id,"name":perfil.nombre}}),
+            &format!("{{questions:[{{id:string,axis:string,text:string,rationale:string}}]}}; al menos {PREGUNTAS_MINIMAS} preguntas al investigador, una por eje, precisas y respondibles en pocas líneas. No preguntes lo que el corpus ya contesta: preguntá lo que cambia el plan. memory son hallazgos previos de este proyecto —contexto, nunca evidencia—: úsalos para preguntar si este informe extiende o revisa lo ya hecho. Ejes de esta modalidad: {ejes}"),
+            json!({"request":self.current(id,"request")?,"coverage":self.current(id,"coverage")?,"prospection":self.current(id,"prospection")?,"design":self.current(id,"design")?,"plan":self.current(id,"plan")?,"profile":{"id":perfil.id,"name":perfil.nombre},"memory":self.memoria_previa(id)?}),
         )?;
         let (questions, filled) = completar_preguntas(round.questions, perfil);
         self.transaction(|| {
@@ -1327,6 +1329,84 @@ impl Engine<'_> {
         Ok(Some(
             json!({"summary":summaries,"claims":claims,"limitations":limitations,"dropped":dropped,"evidence":evidence}),
         ))
+    }
+
+    fn proyecto(&self, id: &str) -> Result<String, String> {
+        self.db
+            .conn()
+            .query_row("SELECT project FROM jobs WHERE id=?1", [id], |r| r.get(0))
+            .map_err(err)
+    }
+
+    /// Hallazgos previos del proyecto que se parecen a esta pregunta.
+    ///
+    /// Provenance clase 2: resultado anterior del propio agente. Viaja al
+    /// diseño y a la ronda de preguntas, y a ningún lado más. Si llegara al
+    /// archivo o a la verificación, el agente podría sostener una afirmación
+    /// con su propio informe anterior y dejaría de estar anclado en el corpus.
+    fn memoria_previa(&self, id: &str) -> Result<Value, String> {
+        let project = self.proyecto(id)?;
+        let pregunta: String = self
+            .db
+            .conn()
+            .query_row("SELECT pregunta FROM jobs WHERE id=?1", [id], |r| r.get(0))
+            .map_err(err)?;
+        Ok(json!(MemoriaDb::nuevo(self.db)
+            .buscar(&project, &pregunta, 3)
+            .into_iter()
+            .map(|m| json!({"title":m.title,"type":m.tipo,"content":m.content,"updated_at":m.updated_at}))
+            .collect::<Vec<_>>()))
+    }
+
+    /// Deja en la memoria longitudinal lo que esta investigación sostuvo: la
+    /// cobertura del recorte y cada afirmación verificada, ligada a la
+    /// evidencia que la sostiene en el ledger.
+    ///
+    /// Solo se recuerda lo sostenido. Un claim descartado o no verificable no
+    /// entra: la memoria de un agente que recuerda sus propias conjeturas se
+    /// convierte en una fuente de errores que se citan a sí mismos.
+    fn recordar(&self, id: &str, claims: &[&Claim]) -> Result<(), String> {
+        let project = self.proyecto(id)?;
+        let memoria = MemoriaDb::nuevo(self.db);
+        let ledger = Ledger::nuevo(self.db);
+        let cobertura = self.repo.cobertura();
+        let (_, mut conflictos) = memoria.guardar(
+            &project,
+            "Cobertura del recorte",
+            TipoMemoria::Finding,
+            &format!(
+                "Cobertura: {} items totales, {} sin procesar.",
+                cobertura.items_total, cobertura.items_sin_procesar
+            ),
+            Some(&format!("cobertura/{project}")),
+            Some(id),
+        )?;
+        for claim in claims {
+            let titulo: String = claim.text.chars().take(80).collect();
+            let (mem_id, candidatos) = memoria.guardar(
+                &project,
+                &titulo,
+                TipoMemoria::Finding,
+                &claim.text,
+                None,
+                Some(id),
+            )?;
+            conflictos.extend(candidatos);
+            // El hallazgo queda ligado a la evidencia primaria que lo sostiene:
+            // sin eso, mañana es una afirmación sin anclaje.
+            if let Some(ledger_id) = &claim.ledger_id {
+                for (evidencia, relacion, _) in ledger.evidencias_del_claim(ledger_id) {
+                    let _ = ledger.ligar_memoria_evidencia(&mem_id, &evidencia.id, &relacion);
+                }
+            }
+        }
+        self.transaction(|| {
+            self.event(
+                id,
+                "memory_saved",
+                json!({"findings":claims.len()+1,"conflicts":conflictos.len()}),
+            )
+        })
     }
 
     /// Asienta el lote en el ledger relacional (`sources`, `evidence`,

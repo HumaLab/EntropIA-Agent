@@ -1536,3 +1536,111 @@ fn revisar_el_plan_invalida_las_verificaciones_ya_asentadas() {
     );
     assert!(ledger.runs_del_claim(&ledger_id).iter().all(|r| r.obsoleto));
 }
+
+/// Contenidos de todos los artefactos de entrada de un rol.
+fn entradas(out: &Value, rol: &str) -> Vec<Value> {
+    out["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["kind"] == format!("input_{rol}"))
+        .map(|a| a["content"].clone())
+        .collect()
+}
+
+#[test]
+fn la_memoria_longitudinal_alimenta_la_investigacion_siguiente() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("memoria-artifacts");
+    let m = modelo(false, false);
+
+    // Primera investigación: deja sus hallazgos sostenidos.
+    let uno = create(&db, &repo, &m, &dir);
+    let id1 = uno["job"]["id"].as_str().unwrap().to_owned();
+    let cerrada = correr(&db, &repo, &m, &dir, &id1);
+    assert!(cerrada["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "memory_saved"));
+
+    let memoria = entropia_agent::memoria::MemoriaDb::nuevo(&db);
+    let recordado = memoria.buscar("p", "huelga", 5);
+    assert!(
+        recordado.iter().any(|r| r.content == "Hubo una huelga"),
+        "{recordado:?}"
+    );
+
+    // Segunda investigación en el mismo proyecto: el diseño ve lo anterior.
+    let dos = create(&db, &repo, &m, &dir);
+    let id2 = dos["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id2);
+    let disenada = step(&db, &repo, &m, &dir, &id2);
+    let vio_memoria = entradas(&disenada, "investigador_principal")
+        .iter()
+        .any(|e| {
+            e["data"]["memory"]
+                .as_array()
+                .is_some_and(|m| !m.is_empty())
+        });
+    assert!(
+        vio_memoria,
+        "el diseño tiene que recibir los hallazgos previos"
+    );
+}
+
+#[test]
+fn los_hallazgos_previos_nunca_llegan_al_archivo_ni_a_la_verificacion() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("frontera-artifacts");
+    let m = modelo(false, false);
+
+    let uno = create(&db, &repo, &m, &dir);
+    let id1 = uno["job"]["id"].as_str().unwrap().to_owned();
+    correr(&db, &repo, &m, &dir, &id1);
+
+    let dos = create(&db, &repo, &m, &dir);
+    let id2 = dos["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id2);
+
+    // Provenance clase 2: un informe previo del agente es contexto de trabajo.
+    // Si llegara al archivo o al verificador, una afirmación podría sostenerse
+    // en el informe anterior del propio agente en vez de en el corpus.
+    for rol in ["asistente_archivo", "asistente_validador"] {
+        let recibidas = entradas(&out, rol);
+        assert!(
+            !recibidas.is_empty(),
+            "{rol} no registró ninguna entrada: el test pasaría en vacío"
+        );
+        for entrada in recibidas {
+            assert!(
+                !entrada.to_string().contains("memory"),
+                "{rol} recibió memoria longitudinal: {entrada}"
+            );
+        }
+    }
+}
+
+#[test]
+fn solo_se_recuerda_lo_que_quedo_sostenido() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("memoria-falsa-artifacts");
+    // Cita fabricada: el claim queda unverifiable y no sostiene nada.
+    let m = modelo(true, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    correr(&db, &repo, &m, &dir, &id);
+
+    let memoria = entropia_agent::memoria::MemoriaDb::nuevo(&db);
+    let recordado = memoria.buscar("p", "huelga", 5);
+    assert!(
+        !recordado.iter().any(|r| r.content == "Hubo una huelga"),
+        "una conjetura no verificada no puede volver como hallazgo: {recordado:?}"
+    );
+}
