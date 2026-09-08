@@ -2,7 +2,7 @@
 //! Model inputs and outputs are data; only the state machine authorizes transitions.
 use crate::{
     cliente_llm::{ClienteLlm, TurnoAgente},
-    dominio::EstadoEpistemico,
+    dominio::{ClaseFuente, EstadoEpistemico, Ledger, RelacionEvidencia, TipoClaim},
     estado::{ahora, nuevo_id, EstadoDb},
     perfiles::{self, Perfil},
     recuperacion::Recuperador,
@@ -116,6 +116,10 @@ struct Claim {
     quotes: Vec<Quote>,
     #[serde(default)]
     interpretative: bool,
+    /// Identidad del claim en el ledger relacional. El artefacto sigue siendo
+    /// la fuente de verdad; esto es el puntero a su proyección consultable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ledger_id: Option<String>,
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Archive {
@@ -1276,10 +1280,12 @@ impl Engine<'_> {
                             evidence_ids: mapped,
                             quotes,
                             interpretative: claim.interpretative,
+                            ledger_id: None,
                         }),
                     }
                 }
             }
+            self.asentar(id, &mut accepted, &supplied)?;
             let next_offset = offset + supplied.len().max(1);
             let checkpoint = json!({"summary":output.summary,"claims":accepted,"limitations":limitations,"dropped":dropped,"evidence":supplied,"next_offset":next_offset});
             self.transaction(|| {
@@ -1321,6 +1327,89 @@ impl Engine<'_> {
         Ok(Some(
             json!({"summary":summaries,"claims":claims,"limitations":limitations,"dropped":dropped,"evidence":evidence}),
         ))
+    }
+
+    /// Asienta el lote en el ledger relacional (`sources`, `evidence`,
+    /// `claims`, `claim_evidence`).
+    ///
+    /// El artefacto sigue siendo la fuente de verdad del workflow: el ledger es
+    /// su proyección consultable. Sin él, un claim solo existe dentro del JSON
+    /// de su artefacto —no se puede preguntar por su estado epistémico, ni
+    /// cruzar una fuente entre investigaciones, ni sostener la invalidación que
+    /// `revise` ya dispara sobre `verification_runs`.
+    ///
+    /// Un pasaje que no se pudo ubicar en su fuente no se asienta: el ledger
+    /// solo guarda evidencia con span verificable.
+    fn asentar(&self, id: &str, claims: &mut [Claim], evidencia: &[Value]) -> Result<(), String> {
+        let ledger = Ledger::nuevo(self.db);
+        let (project, corpus): (String, String) = self
+            .db
+            .conn()
+            .query_row("SELECT project,corpus FROM jobs WHERE id=?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(err)?;
+        let mut fuentes: HashMap<String, String> = HashMap::new();
+        self.transaction(|| {
+            for claim in claims.iter_mut() {
+                let tipo = if claim.interpretative {
+                    TipoClaim::Interpretive
+                } else {
+                    TipoClaim::Factual
+                };
+                let claim_id = ledger.registrar_claim(id, tipo, &claim.text)?;
+                for q in &claim.quotes {
+                    let (Some(inicio), Some(fin)) = (q.span_start, q.span_end) else {
+                        continue;
+                    };
+                    let Some(row) = evidencia.iter().find(|e| e["id"] == q.evidence_id) else {
+                        continue;
+                    };
+                    let fuente = match fuentes.get(&q.evidence_id) {
+                        Some(f) => f.clone(),
+                        None => {
+                            let chunk = row["chunk_id"]
+                                .as_str()
+                                .or_else(|| row["id"].as_str())
+                                .unwrap_or_default();
+                            let f = ledger.registrar_fuente(
+                                ClaseFuente::EntropiaChunk,
+                                Some(q.evidence_id.as_str()),
+                                row["item_id"].as_str(),
+                                row["asset_id"].as_str(),
+                                Some(chunk),
+                                None,
+                                &project,
+                                &corpus,
+                            )?;
+                            ledger.registrar_version_fuente(
+                                &f,
+                                &row.to_string(),
+                                row["text"].as_str(),
+                            )?;
+                            fuentes.insert(q.evidence_id.clone(), f.clone());
+                            f
+                        }
+                    };
+                    let evidence_id = ledger.registrar_evidencia(
+                        &fuente,
+                        &q.quote,
+                        inicio,
+                        fin,
+                        None,
+                        Some(0.9),
+                    )?;
+                    ledger.relacionar(
+                        &claim_id,
+                        &evidence_id,
+                        RelacionEvidencia::Supports,
+                        Some(0.9),
+                    )?;
+                }
+                claim.ledger_id = Some(claim_id);
+            }
+            Ok(())
+        })
     }
 
     /// Juzga cada claim con el protocolo aislado del `Verificador`: span check
@@ -1383,6 +1472,7 @@ impl Engine<'_> {
             } else {
                 ModoVerificacion::Factual
             };
+            let mut modelo = self.llm.modelo().to_string();
             let resultado = match self.abrir_llamada(id, "asistente_validador") {
                 Ok(call) => {
                     self.transaction(|| {
@@ -1401,6 +1491,8 @@ impl Engine<'_> {
                 }
                 Err(_) => {
                     sin_presupuesto = true;
+                    // El run se asienta con el modelo que realmente decidió.
+                    modelo = "entailment-determinista".into();
                     Verificador::nuevo(&agotado).verificar(
                         &claim.text,
                         &lote,
@@ -1409,6 +1501,26 @@ impl Engine<'_> {
                     )?
                 }
             };
+            if let Some(ledger_id) = &claim.ledger_id {
+                // `registrar_verificacion` abre su propia transacción: anidarla
+                // dentro del SAVEPOINT del motor rompe con «cannot start a
+                // transaction within a transaction».
+                Ledger::nuevo(self.db).registrar_verificacion(
+                    ledger_id,
+                    resultado.estado,
+                    Some(&modelo),
+                    Some(&resultado.prompt_hash),
+                    Some(&resultado.evidencia_considerada),
+                    if resultado.contraevidencia.is_empty() {
+                        None
+                    } else {
+                        Some(&resultado.contraevidencia)
+                    },
+                    Some(&resultado.rationale),
+                    resultado.error_kind.as_deref(),
+                    true,
+                )?;
+            }
             out.push(Judgment {
                 id: claim.id.clone(),
                 status: Some(epistemico(resultado.estado)),

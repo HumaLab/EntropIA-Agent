@@ -1389,3 +1389,150 @@ fn el_presupuesto_agotado_degrada_la_verificacion_en_vez_de_saltearla() {
                 .unwrap()
                 .contains("presupuesto agotado")));
 }
+
+#[test]
+fn la_investigacion_queda_consultable_en_el_ledger_relacional() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("ledger-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    let claim = artefacto(&out, "archive")["claims"][0].clone();
+    let ledger_id = claim["ledger_id"]
+        .as_str()
+        .expect("el claim tiene que quedar asentado en el ledger");
+    let ledger = entropia_agent::dominio::Ledger::nuevo(&db);
+
+    // El claim existe como fila, no solo adentro de un JSON.
+    let asentado = ledger
+        .claim(ledger_id)
+        .expect("el claim existe en el ledger");
+    assert_eq!(asentado.texto, "Hubo una huelga");
+    assert_eq!(asentado.job_id, id);
+    assert_eq!(asentado.tipo, "factual");
+
+    // Y su estado epistémico se proyecta desde el run aceptado.
+    assert_eq!(
+        ledger.estado_epistemico(ledger_id),
+        Some(entropia_agent::dominio::EstadoEpistemico::Supported)
+    );
+    let run = ledger
+        .verificacion_vigente(ledger_id)
+        .expect("hay una verificación vigente");
+    assert!(!run.obsoleto);
+    assert!(run.prompt_hash.is_some());
+
+    // La evidencia quedó ligada con su pasaje y su span verificado.
+    let evidencias = ledger.evidencias_del_claim(ledger_id);
+    assert_eq!(evidencias.len(), 1, "{evidencias:?}");
+    let (evidencia, relacion, _) = &evidencias[0];
+    assert_eq!(evidencia.quote, "huelga general");
+    assert_eq!((evidencia.span_start, evidencia.span_end), (0, 14));
+    assert_eq!(relacion, "supports");
+
+    // Y la fuente conserva su procedencia en el corpus.
+    let fuente = ledger
+        .fuente(&evidencia.source_id)
+        .expect("la evidencia apunta a una fuente registrada");
+    assert_eq!(fuente.kind, "entropia_chunk");
+    assert_eq!(fuente.item_id.as_deref(), Some("item-1"));
+    assert_eq!(fuente.chunk_id.as_deref(), Some("chunk-1"));
+}
+
+#[test]
+fn una_cita_sin_span_no_se_asienta_como_evidencia() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("ledger-falsa-artifacts");
+    let m = modelo(true, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+
+    let ledger_id = artefacto(&out, "archive")["claims"][0]["ledger_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let ledger = entropia_agent::dominio::Ledger::nuevo(&db);
+    // El claim se asienta —existió— pero sin evidencia: el ledger solo guarda
+    // citas con span verificable.
+    assert!(ledger.claim(&ledger_id).is_some());
+    assert!(ledger.evidencias_del_claim(&ledger_id).is_empty());
+    assert_eq!(
+        ledger.estado_epistemico(&ledger_id),
+        Some(entropia_agent::dominio::EstadoEpistemico::Unverifiable)
+    );
+}
+
+#[test]
+fn revisar_el_plan_invalida_las_verificaciones_ya_asentadas() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("invalidacion-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+
+    // Avanzar hasta tener verificación, sin llegar al informe.
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    answer_round(&db, &repo, &m, &dir, &id);
+    let mut out = json!(null);
+    for _ in 0..6 {
+        out = step(&db, &repo, &m, &dir, &id);
+        if out["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "verification")
+        {
+            break;
+        }
+    }
+    let ledger_id = artefacto(&out, "archive")["claims"][0]["ledger_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let ledger = entropia_agent::dominio::Ledger::nuevo(&db);
+    assert!(
+        ledger.verificacion_vigente(&ledger_id).is_some(),
+        "la verificación tiene que estar vigente antes de revisar"
+    );
+
+    // Revisar el plan invalida todo lo derivado, incluidas las verificaciones.
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"pause","job_id":id}),
+    )
+    .unwrap();
+    let plan = out["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|a| a["kind"] == "plan" && a["obsolete"] == false)
+        .unwrap()["id"]
+        .clone();
+    procesar(&db,&repo,&m,None,&dir,json!({"op":"revise","job_id":id,"artifact_id":plan,"content":{"queries":["paro"],"bibliography_queries":[],"retrieval_limit":5}})).unwrap();
+
+    // El run sigue existiendo (append-only) pero ya no proyecta.
+    assert!(
+        ledger.verificacion_vigente(&ledger_id).is_none(),
+        "revisar el plan tiene que invalidar la verificación derivada"
+    );
+    assert!(
+        !ledger.runs_del_claim(&ledger_id).is_empty(),
+        "el run no se borra"
+    );
+    assert!(ledger.runs_del_claim(&ledger_id).iter().all(|r| r.obsoleto));
+}
