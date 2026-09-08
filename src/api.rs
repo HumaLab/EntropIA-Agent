@@ -139,6 +139,13 @@ impl ApiAgente<'_> {
         self.op(json!({"op": "source", "job_id": job_id, "item_id": item_id}))
     }
 
+    /// `research_delete`: borra la investigación y todo lo que colgaba de ella
+    /// —artefactos, eventos, evidencia, juicios y archivos—. Es destructivo y
+    /// sin vuelta; un job corriendo se cancela primero.
+    pub fn research_delete(&self, job_id: &str) -> Result<Value, String> {
+        self.op(json!({"op": "delete", "job_id": job_id}))
+    }
+
     /// Jobs que pueden retomarse tras cerrar y reabrir la app.
     pub fn hay_jobs_reanudables(&self) -> Result<Vec<String>, String> {
         let listado = self.research_list()?;

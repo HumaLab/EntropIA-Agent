@@ -1840,3 +1840,133 @@ fn el_artefacto_lleva_el_informe_renderizado_para_que_nadie_lo_rearme() {
     let en_disco = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
     assert_eq!(en_disco, markdown);
 }
+
+#[test]
+fn el_titulo_lo_pone_el_investigador_y_la_pregunta_es_el_respaldo() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("titulo-artifacts");
+    let m = modelo(false, false);
+
+    // Con título propio: la pregunta puede ser larga y no sirve de nombre.
+    let con = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","title":"El conflicto del filet","question":"¿Cómo se organizó el conflicto gremial del SOIP entre marzo y abril de 1965?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30})).unwrap();
+    assert_eq!(con["job"]["title"], "El conflicto del filet");
+    assert_eq!(
+        con["job"]["question"],
+        "¿Cómo se organizó el conflicto gremial del SOIP entre marzo y abril de 1965?"
+    );
+
+    // Sin título: la pregunta lo cubre, y el job nunca queda sin nombre.
+    let sin = create(&db, &repo, &m, &dir);
+    assert_eq!(sin["job"]["title"], "¿Hubo huelga?");
+
+    // Un título en blanco no cuenta como título.
+    let vacio = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","title":"   ","question":"¿Hubo paro?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30})).unwrap();
+    assert_eq!(vacio["job"]["title"], "¿Hubo paro?");
+
+    // Y viaja en el listado, que es donde el investigador lo lee.
+    let listado = procesar(&db, &repo, &m, None, &dir, json!({"op":"list"})).unwrap();
+    assert!(listado["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|j| j["title"] == "El conflicto del filet"));
+}
+
+#[test]
+fn borrar_una_investigacion_se_lleva_todo_lo_que_colgaba_de_ella() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("borrar-state.sqlite");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let dir = path.with_extension("borrar-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    correr(&db, &repo, &m, &dir, &id);
+    assert!(dir.join(&id).join("report.md").exists());
+
+    let ledger_id = artefacto(
+        &procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap(),
+        "archive",
+    )["claims"][0]["ledger_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let borrado = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"delete","job_id":id}),
+    )
+    .unwrap();
+    assert_eq!(borrado["deleted"], id.as_str());
+
+    // El job ya no existe ni se puede consultar.
+    assert!(procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).is_err());
+    assert!(
+        procesar(&db, &repo, &m, None, &dir, json!({"op":"list"})).unwrap()["jobs"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Ni sus claims en el ledger: una investigación a medio borrar es peor
+    // que ninguna.
+    let ledger = entropia_agent::dominio::Ledger::nuevo(&db);
+    assert!(ledger.claim(&ledger_id).is_none());
+    assert!(ledger.runs_del_claim(&ledger_id).is_empty());
+    assert!(ledger.evidencias_del_claim(&ledger_id).is_empty());
+
+    // Ni sus archivos: si quedaran, el próximo job con ese id leería un
+    // informe ajeno.
+    assert!(!dir.join(&id).exists());
+}
+
+#[test]
+fn una_investigacion_corriendo_no_se_borra() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("borrar-viva-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(s["job"]["status"], "running");
+
+    // El conductor podría estar a mitad de un paso y reescribir filas recién
+    // borradas: primero se cancela.
+    let error = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"delete","job_id":id}),
+    )
+    .expect_err("un job corriendo no se borra");
+    assert!(error.contains("Cancelá"), "{error}");
+
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"cancel","job_id":id}),
+    )
+    .unwrap();
+    assert!(procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"delete","job_id":id})
+    )
+    .is_ok());
+}

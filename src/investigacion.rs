@@ -291,6 +291,9 @@ pub fn procesar(
         })?;
         return e.snapshot(id, false);
     }
+    if op == "delete" {
+        return e.delete(id);
+    }
     if op == "advance" {
         let result = e.advance(id, &mut workflow);
         if let Err(err) = result {
@@ -503,6 +506,13 @@ impl Engine<'_> {
     fn create(&self, r: &Value) -> Result<Value, String> {
         let question = required(r, "question")?;
         let project = required(r, "project")?;
+        // El título es del investigador: la pregunta puede ser larga y no
+        // sirve como nombre en una lista. Sin título, la pregunta lo cubre.
+        let title = r["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(question);
         // Modalidad de informe. El default es el perfil general: un job que no
         // la declara no cambia de comportamiento.
         let perfil = match r["modalidad"].as_str().filter(|m| !m.trim().is_empty()) {
@@ -563,7 +573,7 @@ impl Engine<'_> {
         let id=self.transaction(|| {
             let job=MotorTrabajos::nuevo(self.db).crear_job(ConfigJob{modo:"research".into(),pregunta:question.into(),project:project.into(),corpus:"desktop".into(),config_snapshot:json!({"denylist":self.repo.denylist(),"role_contract":1}).to_string(),corpus_snapshot_id:Some(snapshot),max_cost:cost,max_llm_calls:Some(calls)})?;
             self.save(&job.id,&Workflow{step:0,collections:ids,model:None,modalidad:Some(perfil.id.into())})?;
-            self.artifact(&job.id,"request",&json!({"question":question,"project":project,"context":r.get("context"),"max_llm_calls":calls,"max_cost":cost,"modalidad":perfil.id,"modalidad_nombre":perfil.nombre}),false)?;
+            self.artifact(&job.id,"request",&json!({"title":title,"question":question,"project":project,"context":r.get("context"),"max_llm_calls":calls,"max_cost":cost,"modalidad":perfil.id,"modalidad_nombre":perfil.nombre}),false)?;
             self.artifact(&job.id,"coverage",&json!({"collections":selected,"warning":"La cobertura de indexación no demuestra suficiencia temática"}),false)?;
             self.status(&job.id,"running")?;
             self.event(&job.id,"created",json!({}))?;
@@ -571,6 +581,50 @@ impl Engine<'_> {
         })?;
         self.snapshot(&id, false)
     }
+    /// Borra una investigación y todo lo que colgaba de ella.
+    ///
+    /// Es destructivo y sin vuelta: el ledger es append-only mientras la
+    /// investigación existe, pero si el investigador la borra, se va entera —
+    /// artefactos, eventos, evidencia, juicios y los archivos en disco—. Una
+    /// investigación a medio borrar es peor que ninguna.
+    ///
+    /// Un job corriendo no se borra: primero se cancela. El conductor podría
+    /// estar a mitad de un paso y volver a escribir filas recién borradas.
+    fn delete(&self, id: &str) -> Result<Value, String> {
+        let estado = self.job_status(id)?;
+        if estado == "running" {
+            return Err("Cancelá la investigación antes de borrarla".into());
+        }
+        self.transaction(|| {
+            let conn = self.db.conn();
+            // Primero lo que cuelga de los claims, después los claims.
+            conn.execute("DELETE FROM verification_runs WHERE claim_id IN (SELECT id FROM claims WHERE job_id=?1)",[id]).map_err(err)?;
+            conn.execute("DELETE FROM claim_evidence WHERE claim_id IN (SELECT id FROM claims WHERE job_id=?1)",[id]).map_err(err)?;
+            for tabla in [
+                "claims",
+                "human_decisions",
+                "artifacts",
+                "job_events",
+                "llm_calls",
+                "queries",
+                "stages",
+            ] {
+                conn.execute(&format!("DELETE FROM {tabla} WHERE job_id=?1"), [id])
+                    .map_err(err)?;
+            }
+            conn.execute("DELETE FROM jobs WHERE id=?1", [id])
+                .map_err(err)?;
+            Ok(())
+        })?;
+        // Los artefactos en disco viven fuera de la base: si quedaran, el
+        // próximo job con el mismo id leería un informe ajeno.
+        let path = self.dir.join(id);
+        if path.exists() {
+            std::fs::remove_dir_all(&path).map_err(err)?;
+        }
+        Ok(json!({"deleted": id}))
+    }
+
     fn artifact(
         &self,
         id: &str,
@@ -623,7 +677,7 @@ impl Engine<'_> {
             6 => "verification",
             _ => "report",
         };
-        self.db.conn().query_row("SELECT pregunta,status,close_reason,max_llm_calls,max_cost,costo_acumulado,(SELECT COUNT(*) FROM llm_calls WHERE job_id=jobs.id),(SELECT COUNT(*) FROM llm_calls WHERE job_id=jobs.id AND costo IS NULL) FROM jobs WHERE id=?1",[id],|r|Ok(json!({"id":id,"question":r.get::<_,String>(0)?,"status":r.get::<_,String>(1)?,"close_reason":r.get::<_,Option<String>>(2)?,"phase":phase,"max_llm_calls":r.get::<_,Option<i64>>(3)?,"max_cost":r.get::<_,Option<f64>>(4)?,"cost":if r.get::<_,i64>(7)?>0 {None}else{Some(r.get::<_,f64>(5)?)},"llm_calls":r.get::<_,i64>(6)?}))).map_err(err)
+        self.db.conn().query_row("SELECT pregunta,status,close_reason,max_llm_calls,max_cost,costo_acumulado,(SELECT COUNT(*) FROM llm_calls WHERE job_id=jobs.id),(SELECT COUNT(*) FROM llm_calls WHERE job_id=jobs.id AND costo IS NULL),(SELECT json_extract(content_json,'$.title') FROM artifacts WHERE job_id=jobs.id AND tipo='request' ORDER BY version DESC LIMIT 1) FROM jobs WHERE id=?1",[id],|r|{let pregunta:String=r.get(0)?; let titulo:Option<String>=r.get(8)?; Ok(json!({"id":id,"title":titulo.filter(|t|!t.trim().is_empty()).unwrap_or_else(||pregunta.clone()),"question":pregunta,"status":r.get::<_,String>(1)?,"close_reason":r.get::<_,Option<String>>(2)?,"phase":phase,"max_llm_calls":r.get::<_,Option<i64>>(3)?,"max_cost":r.get::<_,Option<f64>>(4)?,"cost":if r.get::<_,i64>(7)?>0 {None}else{Some(r.get::<_,f64>(5)?)},"llm_calls":r.get::<_,i64>(6)?}))}).map_err(err)
     }
     fn snapshot(&self, id: &str, compact: bool) -> Result<Value, String> {
         let mut st = self
