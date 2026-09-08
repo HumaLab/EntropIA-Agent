@@ -919,7 +919,8 @@ fn el_informe_reproduce_los_fragmentos_literales_y_cierra_con_fuentes_citadas() 
     let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
     assert!(md.contains("## Cobertura del recorte consultado"));
     assert!(md.contains("## Fuentes citadas"));
-    assert!(md.contains("huelga general de la pesca en marzo"));
+    // El pasaje verificado, no el fragmento entero.
+    assert!(md.contains("> huelga general"));
     assert!(md.contains("## Encuadre acordado con el investigador"));
     assert!(
         entropia_agent::informe_render::citas_sin_referencia(&md).is_empty(),
@@ -1317,10 +1318,24 @@ fn con_pasaje_literal_el_claim_queda_sostenido_y_se_cita() {
     let j = juicio(&out);
     assert_eq!(j["status"], "supported", "{j}");
     assert!(j["error_kind"].is_null());
-    assert!(!artefacto(&out, "report")["report"]["references"]
+
+    // El informe reproduce el pasaje verificado, no una ventana ciega del
+    // principio del fragmento.
+    let informe = artefacto(&out, "report");
+    assert!(!informe["report"]["references"]
         .as_array()
         .unwrap()
         .is_empty());
+    let cita = informe["report"]["sections"][0]["quotes"][0].clone();
+    assert_eq!(cita["text"], "huelga general", "{cita}");
+    assert_eq!(cita["start"], 0);
+    assert_eq!(cita["end"], 14);
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(md.contains("> huelga general\n"), "{md}");
+    assert!(
+        !md.contains("huelga general de la pesca en marzo"),
+        "se imprimió el fragmento entero en vez del pasaje citado:\n{md}"
+    );
 }
 
 #[test]

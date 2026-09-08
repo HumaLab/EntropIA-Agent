@@ -1628,10 +1628,13 @@ fn sanitize_report(
 
 /// Reproduce los fragmentos de las fuentes usadas y numera las citas.
 ///
-/// Determinista de punta a punta: el texto sale del artefacto `archive`, no
-/// del modelo, así que una cita no puede quedar parafraseada ni inventada. La
-/// numeración es global y por orden de aparición, y toda entrada de `quotes`
-/// tiene su línea en `references`: no queda un `[n]` colgado.
+/// El pasaje que se imprime es el que el archivo declaró y el verificador
+/// validó con el span check: literal contra su fuente y pertinente al claim.
+/// Cuando un claim no declaró ninguno se cae a una ventana del principio del
+/// fragmento, que es literal pero ciega.
+///
+/// La numeración es global y por orden de aparición, y toda entrada de
+/// `quotes` tiene su línea en `references`: no queda un `[n]` colgado.
 fn cite_report(o: &mut Report, claims: &[Claim], evidence: &Value, collections: &Value) {
     let by_claim: HashMap<&str, &Claim> = claims.iter().map(|c| (c.id.as_str(), c)).collect();
     let empty = Vec::new();
@@ -1649,26 +1652,69 @@ fn cite_report(o: &mut Report, claims: &[Claim], evidence: &Value, collections: 
             let Some(claim) = by_claim.get(claim_id.as_str()) else {
                 continue;
             };
-            for evidence_id in &claim.evidence_ids {
-                let Some(row) = by_evidence.get(evidence_id.as_str()) else {
+            if claim.quotes.is_empty() {
+                for evidence_id in &claim.evidence_ids {
+                    let Some(row) = by_evidence.get(evidence_id.as_str()) else {
+                        continue;
+                    };
+                    let n = numerar(&mut numbers, &mut references, evidence_id, row, collections);
+                    if in_section.insert(evidence_id.clone()) {
+                        section.quotes.push(cita(n, row, collections, true));
+                    }
+                }
+                continue;
+            }
+            for q in &claim.quotes {
+                let Some(row) = by_evidence.get(q.evidence_id.as_str()) else {
                     continue;
                 };
-                let n = match numbers.get(evidence_id) {
-                    Some(n) => *n,
-                    None => {
-                        let n = references.len() + 1;
-                        numbers.insert(evidence_id.clone(), n);
-                        references.push(cita(n, row, collections, false));
-                        n
-                    }
-                };
-                if in_section.insert(evidence_id.clone()) {
-                    section.quotes.push(cita(n, row, collections, true));
+                let n = numerar(
+                    &mut numbers,
+                    &mut references,
+                    &q.evidence_id,
+                    row,
+                    collections,
+                );
+                // Una misma fuente puede sostener dos claims con pasajes
+                // distintos: la clave es el par, no la fuente sola.
+                if in_section.insert(format!("{}|{}", q.evidence_id, q.quote)) {
+                    section.quotes.push(cita_de_pasaje(n, row, collections, q));
                 }
             }
         }
     }
     o.references = references;
+}
+
+/// Asigna (o reusa) el número de una fuente y registra su referencia.
+fn numerar(
+    numbers: &mut HashMap<String, usize>,
+    references: &mut Vec<Citation>,
+    evidence_id: &str,
+    row: &Value,
+    collections: &Value,
+) -> usize {
+    if let Some(n) = numbers.get(evidence_id) {
+        return *n;
+    }
+    let n = references.len() + 1;
+    numbers.insert(evidence_id.to_string(), n);
+    references.push(cita(n, row, collections, false));
+    n
+}
+
+/// Cita construida sobre el pasaje verificado. Los offsets se declaran contra
+/// el asset, no contra el fragmento, para que el investigador pueda ir a
+/// buscarlo en la fuente original.
+fn cita_de_pasaje(n: usize, row: &Value, collections: &Value, q: &Quote) -> Citation {
+    let inicio = row["start"].as_i64().unwrap_or(0) + q.span_start.unwrap_or(0);
+    Citation {
+        text: q.quote.clone(),
+        start: inicio,
+        end: inicio + q.quote.chars().count() as i64,
+        truncated: false,
+        ..cita(n, row, collections, false)
+    }
 }
 
 fn cita(n: usize, row: &Value, collections: &Value, con_texto: bool) -> Citation {
