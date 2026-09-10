@@ -18,6 +18,11 @@ struct Model {
     quote_falsa: bool,
     /// El archivo no declara ningún pasaje.
     sin_pasajes: bool,
+    /// La replanificación devuelve el mismo plan que ya había. Es el caso que
+    /// el resto de la suíte no puede producir: su modelo falso siempre cambia
+    /// el plan, así que la rama en que el encuadre no surte efecto nunca se
+    /// ejercitó.
+    replan_identico: bool,
 }
 impl ClienteLlm for Model {
     fn modelo(&self) -> &str {
@@ -44,6 +49,10 @@ impl ClienteLlm for Model {
                 "text": format!("Pregunta {} al investigador", i + 1),
                 "rationale": "Cambia el plan"
             })).collect::<Vec<_>>()})
+        } else if s.contains("replanificá") && self.replan_identico {
+            // Devuelve exactamente el plan de `{queries:`: el encuadre no
+            // dejó huella.
+            json!({"queries":["huelga"],"bibliography_queries":[],"retrieval_limit":10})
         } else if s.contains("replanificá") {
             // El plan revisado se distingue del original: el test comprueba
             // que las respuestas efectivamente lo cambiaron.
@@ -198,6 +207,7 @@ fn no_model_call_before_scope() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let dir = path.with_extension("artifacts");
     assert!(procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"q","project":"p","collection_ids":["c-volantes"],"max_llm_calls":20})).is_err());
@@ -219,6 +229,7 @@ fn la_ronda_de_preguntas_frena_el_informe_hasta_que_el_investigador_responde() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_string();
@@ -265,6 +276,7 @@ fn invented_evidence_is_dropped_and_recorded_but_never_becomes_claim() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap();
@@ -314,6 +326,7 @@ fn insufficient_prospection_is_recorded_and_the_job_continues() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -350,6 +363,7 @@ fn legacy_coverage_closed_job_can_continue_but_cancelled_job_cannot() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_string();
@@ -476,6 +490,7 @@ fn large_archive_checkpoints_invalid_claims_instead_of_blocking_the_batch() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &base, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -648,6 +663,7 @@ fn garbage_archive_json_is_recorded_and_does_not_pause() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &base, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -699,6 +715,7 @@ fn una_ronda_corta_se_completa_con_los_ejes_de_la_modalidad() {
         questions: 1,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -735,6 +752,7 @@ fn las_respuestas_del_investigador_regeneran_el_plan() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -774,6 +792,7 @@ fn answer_rechaza_preguntas_ajenas_rondas_repetidas_y_encuadres_vacios() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -876,6 +895,7 @@ fn el_informe_reproduce_los_fragmentos_literales_y_cierra_con_fuentes_citadas() 
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -943,6 +963,7 @@ fn sin_claims_verificados_el_informe_no_inventa_fuentes_citadas() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -970,6 +991,7 @@ fn la_modalidad_perfila_la_ronda_y_queda_declarada_en_el_informe() {
         questions: 0,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     // Una modalidad que no está en la tabla no crea el job.
     assert!(procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"biografia-inventada"})).is_err());
@@ -1009,6 +1031,7 @@ fn revisar_el_plan_reabre_la_ronda_de_preguntas() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -1058,6 +1081,7 @@ fn la_degradacion_de_un_rol_llega_al_informe_en_vez_de_quedar_solo_en_los_evento
         questions: 0,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -1144,6 +1168,7 @@ fn con_recuperador_la_evidencia_sale_del_pipeline_hibrido_y_del_recorte() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let rec = entropia_agent::recuperacion::Recuperador::con_clientes(
         Box::new(EmbedFijo),
@@ -1200,6 +1225,7 @@ fn sin_recuperador_el_informe_declara_que_busco_solo_por_lexico() {
         questions: 4,
         quote_falsa: false,
         sin_pasajes: false,
+        replan_identico: false,
     };
     let s = create(&db, &repo, &m, &dir);
     let id = s["job"]["id"].as_str().unwrap().to_owned();
@@ -1247,6 +1273,7 @@ fn modelo(quote_falsa: bool, sin_pasajes: bool) -> Model {
         questions: 4,
         quote_falsa,
         sin_pasajes,
+        replan_identico: false,
     }
 }
 
@@ -1969,4 +1996,72 @@ fn una_investigacion_corriendo_no_se_borra() {
         json!({"op":"delete","job_id":id})
     )
     .is_ok());
+}
+
+#[test]
+fn una_replanificacion_que_no_cambia_nada_queda_declarada() {
+    // Visto en un archivo real: se respondieron cuatro preguntas de encuadre
+    // —«solo el conflicto 1965», «priorizar la identidad», «prensa»— y el plan
+    // volvió idéntico byte a byte, conservando la consulta «huelga 1966». El
+    // encuadre no tuvo ningún efecto sobre la búsqueda y nadie lo dijo.
+    //
+    // Que el modelo no cambie el plan es su derecho. Aceptarlo en silencio no:
+    // quien respondió esas preguntas queda creyendo que orientó la
+    // investigación. La misma función ya avisa cuando la replanificación se va
+    // de los límites; una que no cambia nada merece el mismo trato.
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("state.sqlite");
+    let dir = path.with_extension("artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let m = Model {
+        calls: Cell::new(0),
+        invent: false,
+        block: false,
+        questions: 4,
+        quote_falsa: false,
+        sin_pasajes: false,
+        replan_identico: true,
+    };
+
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Tres pasos llegan al plan; el cuarto abre la ronda que `answer_round`
+    // responde y cierra con la replanificación. (`prepare_plan` no sirve acá:
+    // ya responde la ronda por dentro.)
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let planeado = step(&db, &repo, &m, &dir, &id);
+    assert_eq!(artefacto(&planeado, "plan")["queries"], json!(["huelga"]));
+
+    let cerrada = answer_round(&db, &repo, &m, &dir, &id);
+
+    assert!(
+        cerrada["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "role_warning"
+                && e["payload"]["error"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("no cambió el plan"))),
+        "una replanificación sin efecto tiene que quedar declarada: {}",
+        cerrada["events"]
+    );
+
+    // Y no deja una versión nueva idéntica a la anterior: un artefacto que
+    // repite al que ya estaba no registra nada, sólo ensucia la historia.
+    let planes: Vec<_> = cerrada["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["kind"] == "plan" && a["obsolete"] == false)
+        .collect();
+    assert_eq!(
+        planes.len(),
+        1,
+        "el plan no cambió, así que no hay una segunda versión que guardar: {planes:?}"
+    );
 }

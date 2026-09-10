@@ -662,6 +662,11 @@ impl Engine<'_> {
         let text:String=self.db.conn().query_row("SELECT content_json FROM artifacts WHERE job_id=?1 AND tipo=?2 AND obsolete=0 ORDER BY version DESC LIMIT 1",params![id,kind],|r|r.get(0)).map_err(|e|format!("Artefacto {kind}: {e}"))?;
         serde_json::from_str(&text).map_err(err)
     }
+    /// El id del artefacto vigente de un tipo, para poder señalarlo sin
+    /// crear uno nuevo.
+    fn current_artifact_id(&self, id: &str, kind: &str) -> Result<String, String> {
+        self.db.conn().query_row("SELECT id FROM artifacts WHERE job_id=?1 AND tipo=?2 AND obsolete=0 ORDER BY version DESC LIMIT 1",params![id,kind],|r|r.get(0)).map_err(|e|format!("Artefacto {kind}: {e}"))
+    }
     fn require_gates(&self, id: &str) -> Result<(), String> {
         let n:i64=self.db.conn().query_row("SELECT COUNT(*) FROM human_decisions WHERE job_id=?1 AND obsolete=0 AND decision!='approved'",[id],|r|r.get(0)).map_err(err)?;
         if n != 0 {
@@ -1227,7 +1232,22 @@ impl Engine<'_> {
             self.event(id, "role_warning", json!({"role":"investigador_principal","error":"replanificación fuera de límites; se conserva el plan anterior"}))?;
             previous
         };
-        let artifact = self.transaction(|| self.artifact(id, "plan", &json!(revised), false))?;
+        // Una replanificación que devuelve el plan que ya había no incorporó el
+        // encuadre. Puede ser una decisión legítima del rol, pero quien
+        // respondió las preguntas quedaría creyendo que orientó la búsqueda, y
+        // eso no puede resolverse en silencio: la advertencia viaja al informe
+        // igual que la de una replanificación fuera de límites. Tampoco se
+        // guarda una versión nueva idéntica a la anterior — un artefacto que
+        // repite al que ya estaba no registra nada, sólo ensucia la historia.
+        let revised_value = json!(revised);
+        if revised_value == previous_value {
+            let artifact = self.current_artifact_id(id, "plan")?;
+            self.event(id, "role_warning", json!({"role":"investigador_principal","error":"la replanificación no cambió el plan: el encuadre respondido no dejó huella en las consultas"}))?;
+            return Ok(Some(
+                json!({"questions":round["questions"],"answers":round["answers"],"profile":{"id":perfil.id,"name":perfil.nombre},"replanned_artifact":artifact}),
+            ));
+        }
+        let artifact = self.transaction(|| self.artifact(id, "plan", &revised_value, false))?;
         Ok(Some(
             json!({"questions":round["questions"],"answers":round["answers"],"profile":{"id":perfil.id,"name":perfil.nombre},"replanned_artifact":artifact}),
         ))
