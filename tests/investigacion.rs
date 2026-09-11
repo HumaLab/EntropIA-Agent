@@ -2627,6 +2627,17 @@ fn una_replanificacion_que_no_cambia_el_plan_igual_abre_el_gate() {
         json!(["huelga"]),
         "el plan vigente es el de antes de la ronda"
     );
+    // El desktop avisa que el plan no cambió leyendo este código, no la prosa
+    // del mensaje: el código es el contrato.
+    assert!(
+        cerrada["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "role_warning" && e["payload"]["code"] == "plan_unchanged"),
+        "falta el aviso con código plan_unchanged: {}",
+        cerrada["events"]
+    );
 }
 
 #[test]

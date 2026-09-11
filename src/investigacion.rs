@@ -1378,7 +1378,7 @@ impl Engine<'_> {
         let revised_value = json!(revised);
         if revised_value == previous_value {
             let artifact = self.current_artifact_id(id, "plan")?;
-            self.event(id, "role_warning", json!({"role":"investigador_principal","error":"la replanificación no cambió el plan: el encuadre respondido no dejó huella en las consultas"}))?;
+            self.event(id, "role_warning", json!({"role":"investigador_principal","code":"plan_unchanged","error":"la replanificación no cambió el plan: el encuadre respondido no dejó huella en las consultas"}))?;
             return Ok(Some(
                 json!({"questions":round["questions"],"answers":round["answers"],"profile":{"id":perfil.id,"name":perfil.nombre},"replanned_artifact":artifact}),
             ));
