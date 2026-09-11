@@ -152,6 +152,25 @@ fn el_workflow_completo_corre_sobre_el_corpus_real() {
         match out["job"]["status"].as_str() {
             Some("done") => break,
             Some("awaiting_human") => {
+                // Cerrada la ronda, el plan final espera su gate.
+                let gate_plan = out["gates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|g| g["status"] == "pending" && g["kind"] == "plan")
+                    .map(|g| g["id"].clone());
+                if let Some(gate) = gate_plan {
+                    out = procesar(
+                        &db,
+                        &repo,
+                        &llm,
+                        None,
+                        &dir,
+                        json!({"op":"decision","job_id":id,"gate_id":gate,"approve":true}),
+                    )
+                    .unwrap();
+                    continue;
+                }
                 let preguntas = out["artifacts"]
                     .as_array()
                     .unwrap()

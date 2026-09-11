@@ -216,13 +216,25 @@ mod tests {
         })
     }
 
-    /// Avanza respondiendo la ronda cuando el job frena.
+    /// Avanza respondiendo la ronda y aprobando el gate del plan cuando el job
+    /// frena.
     fn hasta_el_final(api: &ApiAgente, id: &str) -> Value {
         let mut out = api.research_get(id).unwrap();
         for _ in 0..60 {
             match out["job"]["status"].as_str() {
                 Some("done") => return out,
                 Some("awaiting_human") => {
+                    let gate_plan = out["gates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|g| g["status"] == "pending" && g["kind"] == "plan")
+                        .and_then(|g| g["id"].as_str())
+                        .map(str::to_owned);
+                    if let Some(gate) = gate_plan {
+                        out = api.research_decision(id, &gate, true).unwrap();
+                        continue;
+                    }
                     let preguntas = out["artifacts"]
                         .as_array()
                         .unwrap()

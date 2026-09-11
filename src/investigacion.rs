@@ -364,9 +364,22 @@ pub fn procesar(
                 if answers.iter().all(|a| a["text"].as_str().unwrap_or("").is_empty()) {
                     return Err("Respondé al menos una pregunta: el encuadre del informe depende de esto".into());
                 }
+                // La ronda muestra el diseño y deja editarlo: editarlo cumple la
+                // función de rechazarlo. Se valida antes de registrar nada, así
+                // que uno inválido deja la ronda abierta y sin respuestas.
+                let diseno = match request.get("design").filter(|d| !d.is_null()) {
+                    Some(d) => { let d: Design = decode(d.clone())?; validate_design(&d)?; Some(json!(d)) },
+                    None => None,
+                };
                 let stage: String = e.db.conn().query_row("SELECT id FROM artifacts WHERE job_id=?1 AND tipo='clarification_round' AND obsolete=0 ORDER BY version DESC LIMIT 1",[id],|r|r.get(0)).map_err(err)?;
                 e.db.conn().execute("UPDATE human_decisions SET decision='approved',timestamp=?1 WHERE job_id=?2 AND stage_id=?3 AND obsolete=0 AND decision='pending'",params![ahora(),id,stage]).map_err(err)?;
                 e.artifact(id,"clarification_round",&json!({"questions":questions,"answers":answers}),false)?;
+                // El replan lee el diseño vigente: recibe el editado sin más.
+                if let Some(diseno) = diseno {
+                    let previo = e.current_artifact_id(id,"design")?;
+                    let nuevo = e.artifact_con_padre(id,"design",&diseno,Some(&previo))?;
+                    e.event(id,"design_edited",json!({"previous":previo,"artifact_id":nuevo}))?;
+                }
                 e.event(id,"clarification_answered",json!({"questions":questions.len(),"answered":answers.iter().filter(|a|!a["text"].as_str().unwrap_or("").is_empty()).count()}))?;
                 e.status(id, if e.require_gates(id).is_ok() {"running"} else {"awaiting_human"})?;
             },
@@ -377,17 +390,31 @@ pub fn procesar(
                 if kind != "design" && kind != "plan" { return Err("Solo se revisan diseño o plan; la evidencia y los juicios son registros inmutables".into()); }
                 let content = request.get("content").ok_or("Falta content")?;
                 if kind == "design" { let d:Design=decode(content.clone())?; validate_design(&d)?; } else { let p:Plan=decode(content.clone())?; validate_plan(&p, e.perfil(&workflow).max_consultas)?; }
+                // El plan se edita en su gate, después de la ronda: la ronda
+                // respondida y su encuadre se conservan, porque el informe los
+                // imprime. El diseño, en cambio, cambia las preguntas: su
+                // edición rehace el plan y vuelve a preguntar.
+                let conserva_ronda = kind == "plan";
                 let at = KINDS.iter().position(|k| *k==kind).ok_or("Tipo desconocido")?;
-                for k in &KINDS[at..] { e.db.conn().execute("UPDATE artifacts SET obsolete=1 WHERE job_id=?1 AND tipo=?2",params![id,k]).map_err(err)?; }
-                for kind in ["clarification_round", "archive_source", "archive_batch", "verification_batch"] {
+                for k in KINDS[at..].iter().filter(|k| !(conserva_ronda && **k == "clarification")) {
+                    e.db.conn().execute("UPDATE artifacts SET obsolete=1 WHERE job_id=?1 AND tipo=?2",params![id,k]).map_err(err)?;
+                }
+                let checkpoints: &[&str] = if conserva_ronda { &["archive_source", "archive_batch", "verification_batch"] } else { &["clarification_round", "archive_source", "archive_batch", "verification_batch"] };
+                for kind in checkpoints {
                     e.db.conn().execute("UPDATE artifacts SET obsolete=1 WHERE job_id=?1 AND tipo=?2",params![id,kind]).map_err(err)?;
                 }
                 e.db.conn().execute("UPDATE human_decisions SET obsolete=1 WHERE job_id=?1 AND stage_id IN (SELECT id FROM artifacts WHERE job_id=?1 AND obsolete=1)",[id]).map_err(err)?;
                 e.db.conn().execute("UPDATE verification_runs SET obsoleto=1 WHERE claim_id IN (SELECT id FROM claims WHERE job_id=?1)",[id]).map_err(err)?;
-                e.artifact(id,&kind,content,true)?;
-                workflow.step=if kind=="design" {2} else {3};
+                // Editar es aprobar: el artefacto editado no deja un gate
+                // pendiente, y la edición queda asentada como la decisión.
+                let nuevo = e.artifact(id,&kind,content,false)?;
+                e.db.conn().execute("INSERT INTO human_decisions(id,job_id,stage_id,alcance,decision,timestamp) VALUES(?1,?2,?3,?4,'approved',?5)",params![nuevo_id("gate"),id,nuevo,kind,ahora()]).map_err(err)?;
+                // Un plan editado antes de que la ronda cierre (paso 3) la
+                // sigue esperando; editado en su gate o después, retoma en el
+                // archivo.
+                workflow.step=if kind=="design" {2} else {workflow.step.min(4)};
                 e.save(id,&workflow)?;
-                e.status(id,"awaiting_human")?;
+                e.status(id, if e.require_gates(id).is_ok() {"running"} else {"awaiting_human"})?;
                 e.event(id,"artifact_revised",json!({"previous":artifact,"kind":kind}))?;
             },
             _ => return Err(format!("Operación desconocida: {op}")),
@@ -636,6 +663,21 @@ impl Engine<'_> {
         content: &Value,
         gate: bool,
     ) -> Result<String, String> {
+        let parent:Option<String>=self.db.conn().query_row("SELECT id FROM artifacts WHERE job_id=?1 AND obsolete=0 ORDER BY rowid DESC LIMIT 1",[id],|r|r.get(0)).optional().map_err(err)?;
+        let art = self.artifact_con_padre(id, kind, content, parent.as_deref())?;
+        if gate {
+            self.abrir_gate(id, &art, kind)?;
+        }
+        Ok(art)
+    }
+    /// Escribe una versión nueva de un artefacto colgada de `padre`.
+    fn artifact_con_padre(
+        &self,
+        id: &str,
+        kind: &str,
+        content: &Value,
+        padre: Option<&str>,
+    ) -> Result<String, String> {
         let version: i64 = self
             .db
             .conn()
@@ -645,18 +687,19 @@ impl Engine<'_> {
                 |r| r.get(0),
             )
             .map_err(err)?;
-        let parent:Option<String>=self.db.conn().query_row("SELECT id FROM artifacts WHERE job_id=?1 AND obsolete=0 ORDER BY rowid DESC LIMIT 1",[id],|r|r.get(0)).optional().map_err(err)?;
         let art = nuevo_id("art");
-        self.db.conn().execute("INSERT INTO artifacts(id,job_id,tipo,path,padre,version,created_at,content_json) VALUES(?1,?2,?3,'',?4,?5,?6,?7)",params![art,id,kind,parent,version,ahora(),content.to_string()]).map_err(err)?;
-        if gate {
-            self.db.conn().execute("INSERT INTO human_decisions(id,job_id,stage_id,alcance,decision,timestamp) VALUES(?1,?2,?3,?4,'pending',?5)",params![nuevo_id("gate"),id,art,kind,ahora()]).map_err(err)?;
-        }
+        self.db.conn().execute("INSERT INTO artifacts(id,job_id,tipo,path,padre,version,created_at,content_json) VALUES(?1,?2,?3,'',?4,?5,?6,?7)",params![art,id,kind,padre,version,ahora(),content.to_string()]).map_err(err)?;
         self.event(
             id,
             "artifact",
             json!({"artifact_id":art,"kind":kind,"version":version}),
         )?;
         Ok(art)
+    }
+    /// Deja un artefacto esperando la decisión del historiador.
+    fn abrir_gate(&self, id: &str, artifact: &str, alcance: &str) -> Result<(), String> {
+        self.db.conn().execute("INSERT INTO human_decisions(id,job_id,stage_id,alcance,decision,timestamp) VALUES(?1,?2,?3,?4,'pending',?5)",params![nuevo_id("gate"),id,artifact,alcance,ahora()]).map_err(err)?;
+        Ok(())
     }
     fn current(&self, id: &str, kind: &str) -> Result<Value, String> {
         let text:String=self.db.conn().query_row("SELECT content_json FROM artifacts WHERE job_id=?1 AND tipo=?2 AND obsolete=0 ORDER BY version DESC LIMIT 1",params![id,kind],|r|r.get(0)).map_err(|e|format!("Artefacto {kind}: {e}"))?;
@@ -867,7 +910,7 @@ impl Engine<'_> {
                         "Sin criterio parseable; se continúa con el material disponible.".into();
                     o.sufficient = true;
                 }
-                ("prospection", json!(o), false)
+                ("prospection", json!(o), None)
             }
             1 => {
                 let o: Design = self.call(
@@ -887,7 +930,7 @@ impl Engine<'_> {
                         ],
                     }
                 };
-                ("design", json!(o), false)
+                ("design", json!(o), None)
             }
             2 => {
                 let perfil = self.perfil(w);
@@ -910,14 +953,16 @@ impl Engine<'_> {
                         retrieval_limit: RERANK_DEPTH,
                     }
                 };
-                ("plan", json!(o), false)
+                ("plan", json!(o), None)
             }
+            // Cerrar la ronda no pide aprobar la ronda: pide aprobar el plan
+            // que quedó vigente después de ella, que es lo que va al corpus.
             3 => match self.clarification_step(id, w)? {
-                Some(output) => ("clarification", output, false),
+                Some(output) => ("clarification", output, Some("plan")),
                 None => return Ok(()),
             },
             4 => match self.archive_step(id, w)? {
-                Some(output) => ("archive", output, false),
+                Some(output) => ("archive", output, None),
                 None => return Ok(()),
             },
             5 => {
@@ -937,11 +982,11 @@ impl Engine<'_> {
                 (
                     "bibliography",
                     json!({"catalog":hits,"synthesis":o.synthesis,"references":references}),
-                    false,
+                    None,
                 )
             }
             6 => match self.verification_step(id)? {
-                Some(output) => ("verification", output, false),
+                Some(output) => ("verification", output, None),
                 None => return Ok(()),
             },
             7 => {
@@ -986,19 +1031,25 @@ impl Engine<'_> {
                 // lo que le pasó al desktop—. El armado del informe es del
                 // motor, no de cada frontend.
                 contenido["markdown"] = json!(crate::informe_render::render(&contenido));
-                ("report", contenido, false)
+                ("report", contenido, None)
             }
             _ => return Err("No quedan etapas ejecutables".into()),
         };
+        // `gate` nombra el tipo de artefacto que queda esperando al
+        // historiador: su versión vigente, no necesariamente la recién escrita.
         self.transaction(|| {
-            self.artifact(id, kind, &output, gate)?;
+            self.artifact(id, kind, &output, false)?;
+            if let Some(sobre) = gate {
+                let objetivo = self.current_artifact_id(id, sobre)?;
+                self.abrir_gate(id, &objetivo, sobre)?;
+            }
             w.step += 1;
             self.save(id, w)?;
             self.status(
                 id,
                 if kind == "report" {
                     "done"
-                } else if gate {
+                } else if gate.is_some() {
                     "awaiting_human"
                 } else {
                     "running"
