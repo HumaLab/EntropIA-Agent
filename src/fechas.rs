@@ -274,11 +274,7 @@ fn dedup_consecutivas(v: Vec<FechaMencionada>) -> Vec<FechaMencionada> {
 // ── parsers ────────────────────────────────────────────────────────────────
 
 fn parse_yy_mm_dd(t: &str) -> Option<Fecha> {
-    let b = t.as_bytes();
-    if b.len() < 8 {
-        return None;
-    }
-    let partes = &t[..8];
+    let partes = t.get(..8)?;
     let mut it = partes.split('-');
     let (yy, mm, dd) = (it.next()?, it.next()?, it.next()?);
     let (yy, mm, dd) = (
@@ -298,11 +294,7 @@ fn parse_yy_mm_dd(t: &str) -> Option<Fecha> {
 }
 
 fn parse_yyyy_mm_dd(t: &str) -> Option<Fecha> {
-    let b = t.as_bytes();
-    if b.len() < 10 {
-        return None;
-    }
-    let partes = &t[..10];
+    let partes = t.get(..10)?;
     let mut it = partes.split('-');
     let (yy, mm, dd) = (it.next()?, it.next()?, it.next()?);
     let (yy, mm, dd) = (
@@ -323,9 +315,10 @@ fn parse_yyyy_mm_dd(t: &str) -> Option<Fecha> {
 
 fn parse_dd_mm_yyyy(t: &str) -> Option<Fecha> {
     // Busca DD-MM-YYYY en cualquier posición (p. ej. «B - 23-07-2011»).
-    let bytes = t.as_bytes();
-    for i in 0..bytes.len().saturating_sub(9) {
-        let ventana = &t[i..i + 10];
+    for (i, _) in t.char_indices() {
+        let Some(ventana) = t.get(i..i + 10) else {
+            continue;
+        };
         let mut it = ventana.split('-');
         let (Some(dd_s), Some(mm_s), Some(yy_s)) = (it.next(), it.next(), it.next()) else {
             continue;
@@ -350,11 +343,7 @@ fn parse_dd_mm_yyyy(t: &str) -> Option<Fecha> {
 
 fn parse_parcial(t: &str) -> Option<Fecha> {
     // «1965-00-0x»: año con mes/día en cero o comodín.
-    let b = t.as_bytes();
-    if b.len() < 10 {
-        return None;
-    }
-    let partes = &t[..10];
+    let partes = t.get(..10)?;
     let mut it = partes.split('-');
     let (yy, mm, dd) = (it.next()?, it.next()?, it.next()?);
     let yy = yy.parse::<i64>().ok()?;
@@ -372,13 +361,11 @@ fn parse_parcial(t: &str) -> Option<Fecha> {
 }
 
 fn parse_anio_suelto(t: &str) -> Option<Fecha> {
-    for i in 0..t.len() {
+    for (i, _) in t.char_indices() {
         let resto = &t[i..];
-        let b = resto.as_bytes();
-        if b.len() < 4 {
-            break;
-        }
-        let cuatro = &resto[..4];
+        let Some(cuatro) = resto.get(..4) else {
+            continue;
+        };
         if cuatro.chars().all(|c| c.is_ascii_digit()) {
             let anio = cuatro.parse::<i64>().ok()?;
             if (1900..=2100).contains(&anio) {
@@ -500,6 +487,51 @@ fn parse_numerica(resto: &str) -> Option<(Fecha, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titulo_reportado_con_represion_conserva_el_anio() {
+        let c = document_date(
+            "1948-01-00 - FORA - Represión anti-obrera en MDP enero 1948",
+            "",
+            None,
+        )
+        .unwrap();
+        assert_eq!(c.fecha.unwrap().iso(), "1948-00-00");
+        assert_eq!(c.precision, Precision::Anio);
+    }
+
+    #[test]
+    fn titulos_unicode_respetan_los_limites_de_las_ventanas() {
+        for caracter in ['ó', '中', '𐍈'] {
+            for padding in 0..10 {
+                let prefijo = format!("{}{caracter}", "a".repeat(padding));
+                assert!(fecha_desde_titulo(&prefijo, "").is_none());
+
+                let titulo = format!("{prefijo} - 23-07-2011");
+                let c = fecha_desde_titulo(&titulo, "").unwrap();
+                assert_eq!(c.fecha.unwrap().iso(), "2011-07-23");
+                assert_eq!(c.precision, Precision::Dia);
+
+                let titulo = format!("{prefijo} - enero 1948");
+                let c = fecha_desde_titulo(&titulo, "").unwrap();
+                assert_eq!(c.fecha.unwrap().iso(), "1948-00-00");
+                assert_eq!(c.precision, Precision::Anio);
+            }
+        }
+    }
+
+    #[test]
+    fn original_path_unicode_conserva_el_anio_de_respaldo() {
+        let c = document_date(
+            "Documento suelto",
+            "",
+            Some("Archivo/Represión obrera/enero 1948"),
+        )
+        .unwrap();
+        assert_eq!(c.fecha.unwrap().iso(), "1948-00-00");
+        assert_eq!(c.precision, Precision::Anio);
+        assert_eq!(c.source, "original_path");
+    }
 
     #[test]
     fn yy_mm_dd_con_sufijo() {
