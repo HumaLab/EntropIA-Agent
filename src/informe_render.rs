@@ -22,6 +22,7 @@ pub fn render(artifact: &Value) -> String {
 
     out.push_str(&tabla_cobertura(&artifact["coverage"]));
     out.push_str(&encabezado_perfil(&artifact["profile"]));
+    out.push_str(&busquedas_corpus(&artifact["retrieval_calls"]));
     out.push_str(&advertencia_cobertura(&artifact["coverage_warning"]));
     out.push_str(&encuadre(&artifact["clarification"]));
 
@@ -90,6 +91,20 @@ fn encabezado_perfil(profile: &Value) -> String {
     }
     out.push('\n');
     out
+}
+
+/// Búsquedas que la recuperación hizo en el corpus y las llamadas externas que
+/// costaron. No salen del presupuesto de llamadas al modelo, así que se
+/// declaran junto a la cobertura: sin esta línea serían un gasto invisible.
+fn busquedas_corpus(llamadas: &Value) -> String {
+    let Some(consultas) = llamadas["queries"].as_u64() else {
+        return String::new();
+    };
+    format!(
+        "Búsquedas en el corpus: {consultas} ({} llamadas de embeddings, {} de rerank; no se descuentan del presupuesto de llamadas al modelo).\n\n",
+        llamadas["embeddings"].as_u64().unwrap_or(0),
+        llamadas["rerank"].as_u64().unwrap_or(0)
+    )
 }
 
 fn advertencia_cobertura(warning: &Value) -> String {

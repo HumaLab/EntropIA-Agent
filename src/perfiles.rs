@@ -39,6 +39,10 @@ pub struct Perfil {
     pub orden_informe: &'static str,
     /// Sesgo que este perfil introduce. Se imprime en el informe.
     pub sesgo_declarado: &'static str,
+    /// Tope de consultas de un plan bajo esta modalidad. Cada consulta es una
+    /// búsqueda en el corpus (embeddings y rerank), así que el tope acota
+    /// también esas llamadas.
+    pub max_consultas: usize,
 }
 
 /// Perfil aplicado cuando el job no declara modalidad.
@@ -59,6 +63,7 @@ const GENERAL: Perfil = Perfil {
     orden_informe: "Ordená las secciones por el hilo argumental del diseño.",
     sesgo_declarado:
         "Sin priorización temática: la recuperación sigue las consultas del plan, que pueden no agotar el corpus.",
+    max_consultas: 20,
 };
 
 const TRAYECTORIAS: Perfil = Perfil {
@@ -78,6 +83,10 @@ const TRAYECTORIAS: Perfil = Perfil {
         "Agrupá las secciones por actor y, dentro de cada actor, en orden temporal ascendente.",
     sesgo_declarado:
         "Prioriza evidencia que nombra actores: los hechos sin actor identificable quedan sub-representados, y un actor nombrado de una forma no prevista queda fuera del recorrido.",
+    // Más alto que el general porque la modalidad pide una consulta por cada
+    // variante del nombre, cargo y organización de cada actor. Valor
+    // provisional hasta que el bench lo mida (pendientes.md #4, Fase 8).
+    max_consultas: 30,
 };
 
 const CRONOLOGIA: Perfil = Perfil {
@@ -97,6 +106,7 @@ const CRONOLOGIA: Perfil = Perfil {
         "Ordená las secciones en orden temporal ascendente y señalá los tramos sin cobertura documental como huecos de la serie.",
     sesgo_declarado:
         "Prioriza evidencia con anclaje temporal: los procesos que las fuentes narran sin fecha quedan sub-representados y la serie puede parecer más continua de lo que el corpus sostiene.",
+    max_consultas: 20,
 };
 
 const PERFILES: [Perfil; 3] = [GENERAL, TRAYECTORIAS, CRONOLOGIA];
@@ -156,6 +166,17 @@ mod tests {
                 assert!(texto.starts_with('¿'), "«{texto}» no se lee como pregunta");
                 assert!(texto.contains('?'), "«{texto}» no cierra la pregunta");
             }
+        }
+    }
+
+    #[test]
+    fn todo_perfil_admite_al_menos_una_consulta() {
+        for p in PERFILES {
+            assert!(
+                p.max_consultas >= 1,
+                "{} con tope cero invalidaría todo plan",
+                p.id
+            );
         }
     }
 

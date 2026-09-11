@@ -2253,3 +2253,166 @@ fn una_replanificacion_que_no_cambia_nada_queda_declarada() {
         "el plan no cambió, así que no hay una segunda versión que guardar: {planes:?}"
     );
 }
+
+/// Consultas numeradas para un plan propio del modelo.
+fn consultas_numeradas(n: usize) -> Vec<String> {
+    (1..=n).map(|i| format!("huelga variante {i}")).collect()
+}
+
+#[test]
+fn trayectorias_conserva_un_plan_de_veinticinco_consultas() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("tope-trayectorias-artifacts");
+    // Una consulta por variante de nombre, cargo y organización de cada actor:
+    // el perfil de trayectorias necesita más consultas que el general.
+    let plan =
+        json!({"queries":consultas_numeradas(25),"bibliography_queries":[],"retrieval_limit":10});
+    let m = PlanPropio {
+        base: modelo(false, false),
+        plan: plan.clone(),
+        replan: plan,
+    };
+    let s = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0,"modalidad":"trayectorias"})).unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let planificado = step(&db, &repo, &m, &dir, &id);
+
+    let plan = artefacto(&planificado, "plan");
+    assert_eq!(plan["queries"], json!(consultas_numeradas(25)), "{plan}");
+    assert!(
+        !eventos(&planificado, "plan_adjusted")
+            .iter()
+            .any(|e| e["payload"]["field"] == "queries"),
+        "{:?}",
+        eventos(&planificado, "plan_adjusted")
+    );
+}
+
+#[test]
+fn un_plan_general_por_encima_del_tope_conserva_las_primeras_consultas() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("tope-general-artifacts");
+    // El prompt pide las consultas de mayor a menor prioridad: recortar la
+    // cola descarta las menos importantes sin tirar el plan entero.
+    let plan =
+        json!({"queries":consultas_numeradas(25),"bibliography_queries":[],"retrieval_limit":10});
+    let m = PlanPropio {
+        base: modelo(false, false),
+        plan: plan.clone(),
+        replan: plan,
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let planificado = step(&db, &repo, &m, &dir, &id);
+
+    let plan = artefacto(&planificado, "plan");
+    assert_eq!(plan["queries"], json!(consultas_numeradas(20)), "{plan}");
+    let ajustes: Vec<&Value> = eventos(&planificado, "plan_adjusted")
+        .into_iter()
+        .filter(|e| e["payload"]["field"] == "queries")
+        .collect();
+    assert_eq!(ajustes.len(), 1, "{ajustes:?}");
+    assert_eq!(
+        ajustes[0]["payload"],
+        json!({"field":"queries","requested":25,"applied":20})
+    );
+    // Un recorte no es un plan de reemplazo.
+    assert!(
+        eventos(&planificado, "role_warning").is_empty(),
+        "{:?}",
+        eventos(&planificado, "role_warning")
+    );
+}
+
+#[test]
+fn revisar_un_plan_por_encima_del_tope_de_consultas_se_rechaza_con_el_rango_valido() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("tope-revise-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    prepare_plan(&db, &repo, &m, &dir, &id);
+    let snapshot = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    let plan = snapshot["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|a| a["kind"] == "plan" && a["obsolete"] == false)
+        .unwrap()["id"]
+        .clone();
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"pause","job_id":id}),
+    )
+    .unwrap();
+    // Una revisión humana no se recorta en silencio: se rechaza con el rango.
+    let error = procesar(&db,&repo,&m,None,&dir,json!({"op":"revise","job_id":id,"artifact_id":plan,"content":{"queries":consultas_numeradas(21),"bibliography_queries":[],"retrieval_limit":5}})).unwrap_err();
+    assert!(error.contains("entre 1 y 20 consultas"), "{error}");
+}
+
+/// Línea del informe que declara las búsquedas en el corpus y sus llamadas.
+fn linea_busquedas(consultas: usize, embeddings: usize, rerank: usize) -> String {
+    format!("Búsquedas en el corpus: {consultas} ({embeddings} llamadas de embeddings, {rerank} de rerank; no se descuentan del presupuesto de llamadas al modelo).")
+}
+
+#[test]
+fn las_llamadas_de_recuperacion_se_declaran_por_consulta_y_en_el_informe() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let m = modelo(false, false);
+
+    // Pipeline híbrido: cada consulta embebe una vez y reranquea una vez,
+    // porque el recorte tiene fragmentos que entran al rerank.
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("llamadas-hibrida-artifacts");
+    let rec = entropia_agent::recuperacion::Recuperador::con_clientes(
+        Box::new(EmbedFijo),
+        Box::new(RerankIdentidad),
+    );
+    let s = procesar(&db,&repo,&m,Some(&rec),&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0})).unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr_con(&db, &repo, &m, Some(&rec), &dir, &id);
+    let consultas = eventos(&out, "query");
+    assert!(!consultas.is_empty());
+    for c in &consultas {
+        assert_eq!(
+            c["payload"]["calls"],
+            json!({"embeddings":1,"rerank":1}),
+            "{c}"
+        );
+    }
+    let n = consultas.len();
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(md.contains(&linea_busquedas(n, n, n)), "{md}");
+
+    // Búsqueda léxica sola: ninguna llamada externa que declarar.
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("llamadas-lexica-artifacts");
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+    let consultas = eventos(&out, "query");
+    assert!(!consultas.is_empty());
+    for c in &consultas {
+        assert_eq!(
+            c["payload"]["calls"],
+            json!({"embeddings":0,"rerank":0}),
+            "{c}"
+        );
+    }
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(md.contains(&linea_busquedas(consultas.len(), 0, 0)), "{md}");
+}

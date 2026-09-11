@@ -131,6 +131,17 @@ pub struct FragmentoRecuperado {
     pub end: i64,
 }
 
+/// Llamadas a servicios externos que hizo una recuperación. Se informan, nunca
+/// se descuentan del presupuesto de llamadas al modelo.
+///
+/// Cuenta envíos, no éxitos: un cliente que devuelve error igual recibió la
+/// llamada y puede facturarla.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LlamadasRecuperacion {
+    pub embeddings: usize,
+    pub rerank: usize,
+}
+
 /// Resultado de una recuperación. La degradación se devuelve, no se esconde:
 /// un informe armado sobre búsqueda léxica sola tiene que poder declararlo.
 #[derive(Debug, Default)]
@@ -138,13 +149,17 @@ pub struct Recuperacion {
     pub fragmentos: Vec<FragmentoRecuperado>,
     /// `None` cuando corrieron las dos piernas y el rerank.
     pub degradacion: Option<String>,
+    /// Llamadas externas que hizo esta consulta.
+    pub llamadas: LlamadasRecuperacion,
 }
 
 impl Recuperacion {
+    /// Salida temprana: no llega a ningún cliente externo.
     fn cortada(motivo: String) -> Self {
         Self {
             fragmentos: Vec::new(),
             degradacion: Some(motivo),
+            llamadas: LlamadasRecuperacion::default(),
         }
     }
 }
@@ -221,6 +236,11 @@ impl Recuperador {
         }
         let mut degradaciones: Vec<String> = Vec::new();
 
+        // El intento cuenta aunque falle: ver `LlamadasRecuperacion`.
+        let mut llamadas = LlamadasRecuperacion {
+            embeddings: 1,
+            rerank: 0,
+        };
         let vectorial = match self.embeddings.embed(consulta) {
             Ok(q) => knn_en(&chunks, &permitidos, &q),
             Err(e) => {
@@ -252,6 +272,7 @@ impl Recuperador {
             return Recuperacion {
                 fragmentos: Vec::new(),
                 degradacion: degradaciones.first().cloned(),
+                llamadas,
             };
         }
 
@@ -259,6 +280,7 @@ impl Recuperador {
             .iter()
             .map(|&i| snippet(&chunks[i].text_content, SNIPPET_MAX))
             .collect();
+        llamadas.rerank = 1;
         let orden = match self.rerank.rerank(consulta, &documentos, limite) {
             Ok(orden) => orden,
             Err(e) => {
@@ -287,6 +309,7 @@ impl Recuperador {
             .collect();
         Recuperacion {
             fragmentos,
+            llamadas,
             degradacion: if degradaciones.is_empty() {
                 None
             } else {
