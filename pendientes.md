@@ -8,54 +8,23 @@ trabajo de Fase 7 sin commitear.
 
 | # | Pendiente | Tipo | Tamaño | Depende de |
 |---|---|---|---|---|
-| 1 | `Fecha::iso()` emite `YYYY-00-00` | Defecto | Chico | — |
-| 2 | `retrieval_limit` promete 1..100 y entrega 16 | Defecto de contrato | Chico | — |
-| 3 | Gates de Fase 6 apagados | Fase del plan | Mediano | — |
-| 4 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | 3 (parcialmente) |
-| 5 | El bench mide mal antes de crecer | Fase del plan | Mediano | — |
-| 6 | Informe sin regeneración por sección | Brecha funcional | Mediano | 3 |
+| 1 | `retrieval_limit` promete 1..100 y entrega 16 | Defecto de contrato | Chico | — |
+| 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | — |
+| 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | 2 (parcialmente) |
+| 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | — |
+| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | 2 |
+| 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | — |
 
-Orden propuesto: **1 y 2** primero (chicos, independientes, cierran promesas falsas
-del contrato); después una **aceptación parcial de Fase 7** (#4, lo que no depende
-de gates) para detectar temprano los defectos que solo ve el consumidor; luego **#3**
-y el cierre de #4; **#5** y **#6** al final.
-
----
-
-## 1. `Fecha::iso()` emite fechas ISO inválidas
-
-**Problema.** Cuando la fecha del documento tiene precisión de año o de mes,
-`Fecha::iso()` rellena los campos ausentes con `00`: `1965-00-00`. Eso no es ISO 8601
-válido y además contradice el campo `precision` que viaja al lado.
-
-**Evidencia.**
-- `src/fechas.rs:52-58` formatea `mes.unwrap_or(0)` y `dia.unwrap_or(0)`.
-- El valor se persiste en `source_temporal_metadata.date` (`src/investigacion.rs:1597-1605`
-  → `src/dominio.rs:720`). La columna es `TEXT` sin `CHECK` (`src/estado.rs:242`).
-- El formato recortado correcto ya existe: `segun_precision` arma `YYYY` / `YYYY-MM`
-  (`src/investigacion.rs:2072-2077`), y citas e informe leen `display`, no `iso`
-  (`src/investigacion.rs:2104`, `src/informe_render.rs:179-184`).
-- Ningún SQL ordena ni compara por esa columna (`src/dominio.rs:735` ordena por `rowid`;
-  el filtro de rango compara tuplas en Rust en `src/puerta_lectura.rs:173-174`).
-
-**Propuesta.**
-1. `iso()` emite precisión reducida ISO 8601 (`1965`, `1965-03`, `1965-03-12`) a partir
-   de `mes`/`dia` presentes.
-2. `segun_precision` deja de duplicar esa lógica y delega en `iso()`.
-3. Migración idempotente al abrir `estado.sqlite` para las filas ya escritas:
-
-   ```sql
-   UPDATE source_temporal_metadata SET date = substr(date, 1, 4) WHERE date LIKE '____-00-00';
-   UPDATE source_temporal_metadata SET date = substr(date, 1, 7) WHERE date LIKE '____-__-00';
-   ```
-
-**Cómo se verifica.** Los tres tests que hoy afirman `"1948-00-00"` (`src/fechas.rs:499,
-517, 531`) pasan a afirmar `"1948"` (test en rojo primero). Un test de la migración
-sobre una base con filas viejas. Los tests de precisión día no cambian.
+Orden propuesto: **#1** primero (chico, independiente, cierra una promesa falsa del
+contrato); después una **aceptación parcial de Fase 7** (#3, lo que no depende de
+gates) para detectar temprano los defectos que solo ve el consumidor; luego **#2** y el
+cierre de #3; **#4** y **#5** después. **#6** no tiene consecuencias hoy: se resuelve
+cuando aparezca el primer consumidor de esa columna o junto con otra migración del
+ledger.
 
 ---
 
-## 2. `retrieval_limit` promete 1..100 y la recuperación híbrida entrega 16
+## 1. `retrieval_limit` promete 1..100 y la recuperación híbrida entrega 16
 
 **Problema.** El contrato del plan acepta hasta 100 resultados por consulta, pero la
 pierna híbrida corta en 16 sin avisar. La pierna léxica, en cambio, respeta el límite
@@ -80,14 +49,14 @@ embeddings, y el evento registra lo pedido en lugar de lo efectivo.
 3. El evento `query` registra `limit_effective` además del pedido.
 
 Alternativa descartada por ahora: subir `RERANK_DEPTH`. Aumenta costo y latencia del
-reranker sin evidencia de que 16 sea insuficiente; se puede revisar con el bench (#5).
+reranker sin evidencia de que 16 sea insuficiente; se puede revisar con el bench (#4).
 
 **Cómo se verifica.** `validate_plan` rechaza 17. La pierna léxica con 3 colecciones no
 devuelve más que el techo. El evento lleva el límite efectivo.
 
 ---
 
-## 3. Gates de Fase 6 apagados
+## 2. Gates de Fase 6 apagados
 
 **Problema.** `plan-agent.md` pide un gate humano entre transiciones del cuaderno de
 campo, y que rechazar el diseño no consuma presupuesto de ejecución
@@ -116,7 +85,7 @@ un diseño malo antes de que se gaste la recuperación.
 4. Restaurar en Pro-Lite la UI de gates que quitó `33986f9`.
 
 **Decisión abierta.** Los umbrales concretos de auto-aprobación. Conviene definirlos
-con el bench (#5), no a ojo.
+con el bench (#4), no a ojo.
 
 **Cómo se verifica.** Rechazar el diseño deja `llm_calls` de recuperación en cero.
 Un gate pendiente bloquea `advance` y `resume`. La auto-aprobación deja una fila en
@@ -124,7 +93,7 @@ Un gate pendiente bloquea `advance` y `resume`. La auto-aprobación deja una fil
 
 ---
 
-## 4. Aceptación de Fase 7 con backend real
+## 3. Aceptación de Fase 7 con backend real
 
 **Problema.** La Fase 7 no se puede cerrar con tests: `plan-agent.md:305-307` exige un
 recorrido end-to-end en Lite y Pro, «incluyendo reinicio con gate pendiente», y el
@@ -143,14 +112,14 @@ verde.
   `running`; con `awaiting_human` lo saca del mapa de activos y lo re-agenda si una op
   devuelve `running` (`:219-226`).
 - Hay una tensión: la aceptación pide «gates accionables», pero hoy no se abre ninguno
-  (#3) y la UI de gates fue retirada.
+  (#2) y la UI de gates fue retirada.
 
 **Propuesta.** Dividir la aceptación en dos pasadas:
-1. **Ahora**, todo lo que no depende de #3. La ronda de clarificación ya estaciona el
+1. **Ahora**, todo lo que no depende de #2. La ronda de clarificación ya estaciona el
    job en `awaiting_human`, así que sirve para probar el reinicio con una decisión
    humana pendiente. Recorrido: `npm run tauri:dev:isolated` en Lite y Pro, y los
    escenarios de arriba.
-2. **Después de #3**, repetir solo los escenarios de gates (reinicio con gate de diseño
+2. **Después de #2**, repetir solo los escenarios de gates (reinicio con gate de diseño
    pendiente, rechazo, auto-aprobación) y cerrar la fase.
 
 **A verificar en el recorrido.**
@@ -163,7 +132,7 @@ crate que lo reproduzca antes del arreglo.
 
 ---
 
-## 5. El bench mide mal antes de crecer
+## 4. El bench mide mal antes de crecer
 
 **Problema.** La Fase 8 pide llevar el bench de 12 a 50–100 preguntas
 (`plan-agent.md:309-316`). Pero con la medición actual, crecer el banco solo multiplica
@@ -174,7 +143,7 @@ números engañosos.
   cobertura hace lo mismo sin items esperados (`:78`). Preguntas como `soip-001..003`
   suman recall perfecto sin medir nada.
 - `retrieval_recall` mide solo la pierna léxica, con FTS5 top 50 (`src/bench.rs:84`),
-  no el recuperador híbrido que usa el workflow, y con un techo distinto al real (#2).
+  no el recuperador híbrido que usa el workflow, y con un techo distinto al real (#1).
 - `claim_support` y `answer_quality` quedan en `None` (`src/bench.rs:107-108`).
 - Solo corre dentro de `cargo test`; no hay un runner que produzca un reporte.
 
@@ -193,7 +162,7 @@ documento», «razoné mal sobre el que recuperé» y «el documento no existía
 
 ---
 
-## 6. El informe no se regenera por sección
+## 5. El informe no se regenera por sección
 
 **Problema.** Un hallazgo tardío obliga a rehacer el informe completo. `revise` solo
 acepta `design` o `plan` e invalida todo lo que sigue, y un job cerrado rechaza
@@ -223,3 +192,53 @@ recupere desde `estado.sqlite`, y los archivos serían una segunda fuente de ver
 **Cómo se verifica.** Revisar una sección no cambia el `llm_calls` de las demás. El
 informe re-ensamblado difiere solo en esa sección. La versión anterior sigue siendo
 legible.
+
+---
+
+## 6. Fechas parciales guardadas como `YYYY-00-00`
+
+**Problema.** Una fecha incompleta («1965», «marzo de 1965») se guarda en el ledger como
+texto con forma de fecha completa, rellenando con `00` lo que no se sabe:
+`1965-00-00`. Eso no es una fecha válida. **Hoy no rompe nada visible**: es un problema
+latente que aparece el día que algo lea esa columna con un parser de fechas.
+
+**Evidencia.**
+- `Fecha::iso()` formatea `mes.unwrap_or(0)` y `dia.unwrap_or(0)` (`src/fechas.rs:52-58`).
+- El valor se persiste en `source_temporal_metadata.date` (`src/investigacion.rs:1597-1605`),
+  una columna `TEXT` que ya tiene al lado `precision` (`day|month|year|none`)
+  (`src/estado.rs:239-246`).
+- Nadie la consume hoy: citas e informe leen `display` (`src/investigacion.rs:2104`,
+  `src/informe_render.rs:179-184`), la única lectura ordena por `rowid`
+  (`src/dominio.rs:735`) y el filtro de rango compara tuplas en Rust
+  (`src/puerta_lectura.rs:173-174`).
+- Comportamiento medido de los parsers habituales:
+
+  | Valor guardado | JavaScript `new Date` | SQLite `date()` |
+  |---|---|---|
+  | `1965-00-00` | Invalid Date | `NULL` |
+  | `1965` | 1965-01-01 | `-4707-04-11` |
+  | `1965-03` | 1965-03-01 | `NULL` |
+
+**Alternativa descartada.** Emitir ISO 8601 de precisión reducida (`1965`, `1965-03`).
+Parece la corrección obvia, pero SQLite interpreta un número suelto como día juliano y
+devuelve una fecha del año -4707 **sin error**: se cambia un fallo visible por uno
+silencioso. Tampoco sirve completar con `01-01`: inventa un día que el documento no
+dice, y un lector que ignore `precision` lo tomaría por un dato.
+
+**Propuesta.** Guardar la fecha como lo que es: un año seguro y mes/día opcionales. El
+tipo en Rust ya tiene esa forma (`Fecha { anio, mes: Option, dia: Option }`,
+`src/fechas.rs:44-48`); lo que falla es solo la persistencia.
+1. Migración numerada nueva en `src/estado.rs` que agrega `year INTEGER`,
+   `month INTEGER NULL` y `day INTEGER NULL` a `source_temporal_metadata`, y las
+   completa desde `date` para las filas existentes.
+2. `registrar_metadata_temporal` recibe la `Fecha` (o sus tres campos) en lugar del
+   texto de `iso()`.
+3. `date` queda como columna heredada sin escritores nuevos, o se elimina si la
+   migración reconstruye la tabla. `precision` se mantiene: es consistente con qué
+   campos están presentes y lleva `none` cuando no hay fecha.
+
+**Cómo se verifica.** Test de la migración sobre una base con filas `1965-00-00`,
+`1965-03-00` y `1965-03-12`: quedan como `(1965, NULL, NULL)`, `(1965, 3, NULL)` y
+`(1965, 3, 12)`. Una consulta SQL `ORDER BY year, month, day` ordena bien las tres. Los
+tests de `fechas.rs` que afirman `"1948-00-00"` (`:499`, `:517`, `:531`) se revisan
+según `iso()` se conserve o se retire.
