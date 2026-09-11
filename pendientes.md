@@ -8,7 +8,7 @@ trabajo de Fase 7 sin commitear.
 
 | # | Pendiente | Tipo | Tamaño | Depende de |
 |---|---|---|---|---|
-| 1 | `retrieval_limit` promete 1..100 y entrega 16 | Defecto de contrato | Chico | — |
+| 1 | Límites de recuperación: por búsqueda (promete 100, entrega 16) y por plan (20 fijo) | Defecto de contrato | Chico-mediano | — |
 | 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | — |
 | 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | 2 (parcialmente) |
 | 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | — |
@@ -24,7 +24,9 @@ ledger.
 
 ---
 
-## 1. `retrieval_limit` promete 1..100 y la recuperación híbrida entrega 16
+## 1. Límites de recuperación
+
+### Por búsqueda: `retrieval_limit` promete 1..100 y la recuperación híbrida entrega 16
 
 **Problema.** El contrato del plan acepta hasta 100 resultados por consulta, pero la
 pierna híbrida corta en 16 sin avisar. La pierna léxica, en cambio, respeta el límite
@@ -40,19 +42,63 @@ embeddings, y el evento registra lo pedido en lugar de lo efectivo.
 - `retrieve_lexico` aplica `LIMIT ?3` por colección (`src/investigacion.rs:1098-1102`).
 - El evento `query` guarda `"limit": p.retrieval_limit` (`src/investigacion.rs:1073`).
 - `PLAN.md:635-636` ya lo anota como deuda; no hay registro de por qué 16.
+- Toda la evidencia recuperada pasa al asistente de archivo en lotes de 48 KB, y cada
+  lote es una llamada al modelo (`src/investigacion.rs:1300-1313`). No hay tope total.
+- Medido en `entropia.sqlite`: 1648 chunks en 17 colecciones, de ~800 bytes (mediana
+  816, máximo 944). En modo léxico, con límite 100 por colección y 17 colecciones, una
+  investigación puede recuperar **el corpus entero** (~45 lotes), justo en el modo de
+  peor calidad.
 
 **Propuesta.** Que el contrato diga la verdad, sin encarecer el rerank:
-1. Una sola constante pública para el techo (`RERANK_DEPTH`), usada por `validate_plan`,
-   por el texto de los prompts y por el plan de respaldo (que baja de 20 a 16).
+1. Techo de **16 por búsqueda**: una sola constante pública (`RERANK_DEPTH`), usada por
+   `validate_plan`, por el texto de los prompts («límite 1..16») y por el plan de
+   respaldo (que baja de 20 a 16). Es lo que la pierna híbrida ya entrega; 16 chunks con
+   sus metadatos ocupan alrededor de medio lote.
 2. La pierna léxica aplica el mismo techo **en total**, no por colección, para que ambas
    piernas tengan la misma semántica.
 3. El evento `query` registra `limit_effective` además del pedido.
 
-Alternativa descartada por ahora: subir `RERANK_DEPTH`. Aumenta costo y latencia del
-reranker sin evidencia de que 16 sea insuficiente; se puede revisar con el bench (#4).
+Alternativa descartada por ahora: subir `RERANK_DEPTH`. No alcanza con cambiar la
+constante: dos piernas de `LEG_K = 24` (`src/recuperacion.rs:22`) dan como mucho 48
+candidatos, así que también habría que subir `LEG_K`, y el reranker procesa más
+documentos por búsqueda. No hay evidencia de que 16 sea insuficiente; se revisa con el
+bench (#4).
 
-**Cómo se verifica.** `validate_plan` rechaza 17. La pierna léxica con 3 colecciones no
-devuelve más que el techo. El evento lleva el límite efectivo.
+### Cuántas búsquedas por plan
+
+**Problema.** `validate_plan` acepta como mucho 20 búsquedas (`src/investigacion.rs:1913`)
+y los prompts lo repiten (`:896`, `:1226`). El número entró con el workflow (`7a8d8fb`)
+sin justificación en el commit, en `PLAN.md` ni en `plan-agent.md`: es un tope de
+seguridad elegido a ojo. Tiene dos consecuencias:
+- **Queda corto para `trayectorias`.** Su prompt pide consultas por cada variante del
+  nombre de cada actor, por sus cargos y por sus organizaciones (`src/perfiles.rs:73-74`):
+  3 actores × 3 variantes × 2 cargos ya son 18. Una trayectoria se pierde cuando la
+  fuente nombra al actor de otra manera, así que el margen falta justo donde más cuenta.
+- **El costo de cada búsqueda no se ve.** Cada búsqueda híbrida hace una llamada de
+  embeddings y una de rerank. `recuperacion.rs` no las registra ni las descuenta de
+  `max_llm_calls`, que es el presupuesto que fija el investigador
+  (`src/investigacion.rs:562-565`). Solo se descuentan los lotes de archivo que produce
+  la evidencia.
+
+Contexto del corpus: 20 × 16 = 320 chunks, casi el 20 % del corpus. Más búsquedas se
+solapan cada vez más con las anteriores (los chunks repetidos se descartan en
+`src/investigacion.rs:1074-1077`), así que el rendimiento de cada búsqueda extra baja.
+
+**Propuesta.**
+1. El tope de búsquedas pasa a ser un campo del perfil (`src/perfiles.rs`), usado por
+   `validate_plan` y por el texto de los prompts. `general` y `cronologia` quedan en 20;
+   `trayectorias` sube, con el número concreto definido por el bench (#4).
+2. Las llamadas de recuperación (embeddings y rerank) quedan registradas por job, y se
+   decide si se descuentan del presupuesto o se informan aparte. Si no, ampliar el tope
+   agranda un costo que el investigador no ve.
+
+Es independiente del techo de 16 por búsqueda: uno controla la amplitud (cuántas
+preguntas distintas) y el otro la profundidad (cuánto se baja en cada lista).
+
+**Cómo se verifica.** `validate_plan` rechaza un límite de 17. La pierna léxica con 3
+colecciones no devuelve más que el techo en total. El evento lleva el límite efectivo.
+Un plan de `trayectorias` con más de 20 búsquedas (hasta su tope) se acepta y uno de
+`general` con 21 se rechaza. Una investigación registra sus llamadas de recuperación.
 
 ---
 
