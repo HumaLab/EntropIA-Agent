@@ -227,6 +227,38 @@ CREATE TABLE _migrations (
     path
 }
 
+/// Agrega a una colección del corpus sintético `n` ítems con un chunk cada
+/// uno, todos con el mismo texto. Sirve para tener más coincidencias que el
+/// techo de recuperación.
+pub fn agregar_chunks(path: &std::path::Path, coleccion: &str, n: usize, texto: &str) {
+    let conn = Connection::open(path).unwrap();
+    let emb: Vec<u8> = vec![0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00];
+    for i in 0..n {
+        let item = format!("item-{coleccion}-{i}");
+        let chunk = format!("chunk-{coleccion}-{i}");
+        conn.execute(
+            "INSERT INTO items (id, title, collection_id, metadata, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, '{}', 1700000000, 1700000000)",
+            rusqlite::params![item, format!("documento {i}"), coleccion],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO rag_chunks (id, asset_id, item_id, source_kind, source_id, \
+             chunk_ordinal, text_content, start_char, end_char, source_text_hash, \
+             chunking_contract, embedding, embedding_model, embedding_contract, dimensions) \
+             VALUES (?1, ?1, ?2, 'transcription', 'src', 0, ?3, 0, 100, 'hash', \
+                     'test', ?4, 'bge-m3', 'test', 1024)",
+            rusqlite::params![chunk, item, texto, emb],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO rag_chunks_fts (chunk_id, text_content) VALUES (?1, ?2)",
+            rusqlite::params![chunk, texto],
+        )
+        .unwrap();
+    }
+}
+
 /// Doble de LLM que responde los contratos JSON de cada rol del workflow.
 ///
 /// Existe para ejercitar el motor completo sin red y sin depender de la

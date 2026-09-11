@@ -6,7 +6,7 @@ use crate::{
     estado::{ahora, nuevo_id, EstadoDb},
     memoria::{MemoriaDb, TipoMemoria},
     perfiles::{self, Perfil},
-    recuperacion::Recuperador,
+    recuperacion::{Recuperador, RERANK_DEPTH},
     repositorio::{fts5_query, RepositorioSqlite},
     trabajos::{ConfigJob, MotorTrabajos},
     verificador::{EvidenciaConTexto, ModoVerificacion, Verificador},
@@ -893,9 +893,10 @@ impl Engine<'_> {
                 let perfil = self.perfil(w);
                 let o: Plan = self.call(
                     id, "investigador_principal",
-                    &format!("{{queries:string[],bibliography_queries:string[],retrieval_limit:integer}}; entre 1 y 20 consultas, límite 1..100; bibliografía puede quedar vacía si no corresponde. {}", perfil.hint_consultas),
+                    &format!("{{queries:string[],bibliography_queries:string[],retrieval_limit:integer}}; entre 1 y 20 consultas, límite 1..{RERANK_DEPTH}; bibliografía puede quedar vacía si no corresponde. {}", perfil.hint_consultas),
                     self.current(id, "design")?,
                 )?;
+                let o = self.ajustar_limite(id, o)?;
                 let o = if validate_plan(&o).is_ok() {
                     o
                 } else {
@@ -906,7 +907,7 @@ impl Engine<'_> {
                             .unwrap_or("investigación")
                             .into()],
                         bibliography_queries: vec![],
-                        retrieval_limit: 20,
+                        retrieval_limit: RERANK_DEPTH,
                     }
                 };
                 ("plan", json!(o), false)
@@ -1029,6 +1030,23 @@ impl Engine<'_> {
         }
         Ok(())
     }
+    /// Baja al techo de recuperación el límite que pide un plan del modelo.
+    ///
+    /// Pedir más fragmentos de los que la recuperación entrega no invalida el
+    /// plan: las consultas se conservan y el ajuste queda registrado. No es
+    /// una degradación —la recuperación no habría entregado más—, por eso va
+    /// en un evento propio y no en `role_warning`.
+    fn ajustar_limite(&self, id: &str, mut plan: Plan) -> Result<Plan, String> {
+        if plan.retrieval_limit > RERANK_DEPTH {
+            self.event(
+                id,
+                "plan_adjusted",
+                json!({"field":"retrieval_limit","requested":plan.retrieval_limit,"applied":RERANK_DEPTH}),
+            )?;
+            plan.retrieval_limit = RERANK_DEPTH;
+        }
+        Ok(plan)
+    }
     /// Recupera la evidencia del plan, siempre acotada al recorte del job.
     ///
     /// Con `Recuperador` corre el pipeline híbrido del desktop: BGE-M3, FTS5,
@@ -1088,23 +1106,42 @@ impl Engine<'_> {
             .unwrap_or_default()
     }
 
-    /// Pierna léxica sola, acotada por colección. Es el modo degradado.
+    /// Pierna léxica sola, acotada por consulta sobre todo el recorte. Es el
+    /// modo degradado.
+    ///
+    /// El límite del plan vale para la consulta entera, no para cada
+    /// colección: con varias colecciones, una consulta por colección
+    /// entregaría límite × colecciones y rompería el techo del plan.
     fn retrieve_lexico(&self, w: &Workflow, p: &Plan, query: &str) -> Result<Vec<Value>, String> {
         let fts = fts5_query(query);
         if fts.is_empty() {
             return Ok(Vec::new());
         }
-        let mut out = Vec::new();
-        for col in &w.collections {
-            let sql="SELECT rc.id,rc.item_id,i.title,rc.text_content,rc.asset_id,rc.start_char,rc.end_char FROM rag_chunks_fts f JOIN rag_chunks rc ON rc.id=f.chunk_id JOIN items i ON i.id=rc.item_id WHERE rag_chunks_fts MATCH ?1 AND i.collection_id=?2 ORDER BY bm25(rag_chunks_fts),rc.id LIMIT ?3";
-            let mut st = self.repo.prepare_pub(sql).map_err(err)?;
-            let coleccion = self.nombre_coleccion(col);
-            let rows=st.query_map(params![fts,col,p.retrieval_limit as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item_id":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"asset_id":r.get::<_,String>(4)?,"start":r.get::<_,i64>(5)?,"end":r.get::<_,i64>(6)?,"collection_id":col,"provenance":"entropia_chunk"}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
-            for mut fila in rows {
-                fila["document_date"] =
-                    fecha_documento(fila["title"].as_str().unwrap_or_default(), &coleccion);
-                out.push(fila);
-            }
+        let marcas = (0..w.collections.len())
+            .map(|i| format!("?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT rc.id,rc.item_id,i.title,rc.text_content,rc.asset_id,rc.start_char,rc.end_char,i.collection_id FROM rag_chunks_fts f JOIN rag_chunks rc ON rc.id=f.chunk_id JOIN items i ON i.id=rc.item_id WHERE rag_chunks_fts MATCH ?1 AND i.collection_id IN ({marcas}) ORDER BY bm25(rag_chunks_fts),rc.id LIMIT ?{}", w.collections.len() + 2);
+        let limite = p.retrieval_limit as i64;
+        let mut valores: Vec<&dyn rusqlite::ToSql> = vec![&fts];
+        valores.extend(w.collections.iter().map(|c| c as &dyn rusqlite::ToSql));
+        valores.push(&limite);
+        let nombres: HashMap<&str, String> = w
+            .collections
+            .iter()
+            .map(|c| (c.as_str(), self.nombre_coleccion(c)))
+            .collect();
+        let mut st = self.repo.prepare_pub(&sql).map_err(err)?;
+        let rows=st.query_map(valores.as_slice(),|r|Ok(json!({"id":r.get::<_,String>(0)?,"item_id":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"asset_id":r.get::<_,String>(4)?,"start":r.get::<_,i64>(5)?,"end":r.get::<_,i64>(6)?,"collection_id":r.get::<_,String>(7)?,"provenance":"entropia_chunk"}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for mut fila in rows {
+            let coleccion = nombres
+                .get(fila["collection_id"].as_str().unwrap_or_default())
+                .map(String::as_str)
+                .unwrap_or_default();
+            fila["document_date"] =
+                fecha_documento(fila["title"].as_str().unwrap_or_default(), coleccion);
+            out.push(fila);
         }
         Ok(out)
     }
@@ -1223,9 +1260,10 @@ impl Engine<'_> {
         let previous: Plan = decode(previous_value.clone())?;
         let replanned: Plan = self.call(
             id, "investigador_principal",
-            &format!("{{queries:string[],bibliography_queries:string[],retrieval_limit:integer}}; replanificá con las respuestas del investigador, con las mismas reglas: entre 1 y 20 consultas y límite 1..100. Una pregunta sin responder no se completa con supuestos. {}", perfil.hint_consultas),
+            &format!("{{queries:string[],bibliography_queries:string[],retrieval_limit:integer}}; replanificá con las respuestas del investigador, con las mismas reglas: entre 1 y 20 consultas y límite 1..{RERANK_DEPTH}. Una pregunta sin responder no se completa con supuestos. {}", perfil.hint_consultas),
             json!({"design":self.current(id,"design")?,"plan":previous_value,"clarification":round,"profile":{"id":perfil.id,"name":perfil.nombre}}),
         )?;
+        let replanned = self.ajustar_limite(id, replanned)?;
         let revised = if validate_plan(&replanned).is_ok() {
             replanned
         } else {
@@ -1913,10 +1951,10 @@ fn validate_plan(p: &Plan) -> Result<(), String> {
         || p.queries.len() > 20
         || p.bibliography_queries.len() > 10
         || p.retrieval_limit == 0
-        || p.retrieval_limit > 100
+        || p.retrieval_limit > RERANK_DEPTH
         || p.queries.iter().any(|q| q.trim().is_empty())
     {
-        Err("Plan fuera de límites de consultas/recuperación".into())
+        Err(format!("Plan fuera de límites de consultas/recuperación: entre 1 y 20 consultas no vacías, hasta 10 bibliográficas y retrieval_limit 1..{RERANK_DEPTH}"))
     } else {
         Ok(())
     }

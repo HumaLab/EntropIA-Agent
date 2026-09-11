@@ -20,8 +20,9 @@ use crate::vector;
 
 /// Candidatos por pierna de recuperación.
 const LEG_K: usize = 24;
-/// Candidatos que entran al rerank.
-const RERANK_DEPTH: usize = 16;
+/// Candidatos que entran al rerank. Es también el techo del `retrieval_limit`
+/// de un plan: la recuperación no entrega más fragmentos por consulta.
+pub const RERANK_DEPTH: usize = 16;
 /// Constante de suavizado de RRF.
 const RRF_K: usize = 60;
 /// Tope de caracteres por fragmento.

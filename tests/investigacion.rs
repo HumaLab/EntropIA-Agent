@@ -92,13 +92,46 @@ impl ClienteLlm for Model {
         Ok(TurnoAgente::Texto(output.to_string()))
     }
 }
-fn create(db: &EstadoDb, repo: &RepositorioSqlite, m: &Model, dir: &std::path::Path) -> Value {
+/// Modelo que propone sus propios planes y delega el resto de los roles en
+/// `Model`. Sirve para ejercitar lo que el código hace con un plan que el
+/// modelo propone fuera del contrato.
+struct PlanPropio {
+    base: Model,
+    /// Lo que devuelve el paso de plan.
+    plan: Value,
+    /// Lo que devuelve la replanificación tras la ronda de clarificación.
+    replan: Value,
+}
+impl ClienteLlm for PlanPropio {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        let s = m[0]["content"].as_str().unwrap();
+        if s.contains("replanificá") {
+            Ok(TurnoAgente::Texto(self.replan.to_string()))
+        } else if s.contains("{queries:") {
+            Ok(TurnoAgente::Texto(self.plan.to_string()))
+        } else {
+            self.base.turno_agente(m, t)
+        }
+    }
+}
+fn create(
+    db: &EstadoDb,
+    repo: &RepositorioSqlite,
+    m: &dyn ClienteLlm,
+    dir: &std::path::Path,
+) -> Value {
     procesar(db,repo,m,None,dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0})).unwrap()
 }
 fn step(
     db: &EstadoDb,
     repo: &RepositorioSqlite,
-    m: &Model,
+    m: &dyn ClienteLlm,
     dir: &std::path::Path,
     id: &str,
 ) -> Value {
@@ -127,7 +160,7 @@ fn artefacto(snapshot: &Value, kind: &str) -> Value {
 fn answer_round(
     db: &EstadoDb,
     repo: &RepositorioSqlite,
-    m: &Model,
+    m: &dyn ClienteLlm,
     dir: &std::path::Path,
     id: &str,
 ) -> Value {
@@ -1126,7 +1159,7 @@ impl entropia_agent::recuperacion::Reranker for RerankIdentidad {
 fn correr_con(
     db: &EstadoDb,
     repo: &RepositorioSqlite,
-    m: &Model,
+    m: &dyn ClienteLlm,
     rec: Option<&entropia_agent::recuperacion::Recuperador>,
     dir: &std::path::Path,
     id: &str,
@@ -1251,6 +1284,161 @@ fn sin_recuperador_el_informe_declara_que_busco_solo_por_lexico() {
     assert!(
         md.contains("**Degradación del pipeline:** recuperación solo léxica"),
         "{md}"
+    );
+}
+
+/// Eventos de un tipo en un snapshot.
+fn eventos<'a>(snapshot: &'a Value, kind: &str) -> Vec<&'a Value> {
+    snapshot["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == kind)
+        .collect()
+}
+
+#[test]
+fn un_limite_de_recuperacion_por_encima_del_techo_se_ajusta_sin_descartar_el_plan() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("techo-plan-artifacts");
+    // El modelo pide más de lo que la recuperación híbrida entrega: el plan
+    // es válido en todo lo demás y no hay motivo para tirarlo.
+    let m = PlanPropio {
+        base: modelo(false, false),
+        plan: json!({"queries":["huelga"],"bibliography_queries":[],"retrieval_limit":50}),
+        replan: json!({"queries":["huelga","asamblea"],"bibliography_queries":[],"retrieval_limit":50}),
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let planificado = step(&db, &repo, &m, &dir, &id);
+
+    let plan = artefacto(&planificado, "plan");
+    assert_eq!(plan["queries"], json!(["huelga"]), "{plan}");
+    assert_eq!(plan["retrieval_limit"], 16, "{plan}");
+    let ajustes = eventos(&planificado, "plan_adjusted");
+    assert_eq!(ajustes.len(), 1, "{ajustes:?}");
+    assert_eq!(
+        ajustes[0]["payload"],
+        json!({"field":"retrieval_limit","requested":50,"applied":16})
+    );
+    // Un ajuste no es una degradación: no hay plan de reemplazo que declarar.
+    assert!(
+        eventos(&planificado, "role_warning").is_empty(),
+        "{:?}",
+        eventos(&planificado, "role_warning")
+    );
+
+    // La replanificación pasa por el mismo ajuste en vez de descartarse.
+    let replanificado = answer_round(&db, &repo, &m, &dir, &id);
+    let plan = artefacto(&replanificado, "plan");
+    assert_eq!(plan["queries"], json!(["huelga", "asamblea"]), "{plan}");
+    assert_eq!(plan["retrieval_limit"], 16, "{plan}");
+    assert_eq!(eventos(&replanificado, "plan_adjusted").len(), 2);
+    assert!(
+        eventos(&replanificado, "role_warning").is_empty(),
+        "{:?}",
+        eventos(&replanificado, "role_warning")
+    );
+}
+
+#[test]
+fn revisar_un_plan_con_limite_por_encima_del_techo_se_rechaza_con_el_rango_valido() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("techo-revise-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    prepare_plan(&db, &repo, &m, &dir, &id);
+    let snapshot = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    let plan = snapshot["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|a| a["kind"] == "plan" && a["obsolete"] == false)
+        .unwrap()["id"]
+        .clone();
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"pause","job_id":id}),
+    )
+    .unwrap();
+    // Una revisión humana no se corrige en silencio: se rechaza y se dice por qué.
+    let error = procesar(&db,&repo,&m,None,&dir,json!({"op":"revise","job_id":id,"artifact_id":plan,"content":{"queries":["paro"],"bibliography_queries":[],"retrieval_limit":17}})).unwrap_err();
+    assert!(error.contains("1..16"), "{error}");
+}
+
+#[test]
+fn el_plan_de_reemplazo_recupera_hasta_el_techo() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("techo-fallback-artifacts");
+    // Sin consultas el plan es estructuralmente inválido: ahí sí se reemplaza.
+    let vacio = json!({"queries":[],"bibliography_queries":[],"retrieval_limit":10});
+    let m = PlanPropio {
+        base: modelo(false, false),
+        plan: vacio.clone(),
+        replan: vacio,
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let planificado = step(&db, &repo, &m, &dir, &id);
+
+    let plan = artefacto(&planificado, "plan");
+    assert_eq!(plan["queries"], json!(["¿Hubo huelga?"]), "{plan}");
+    assert_eq!(plan["retrieval_limit"], 16, "{plan}");
+    assert!(eventos(&planificado, "role_warning")
+        .iter()
+        .any(|e| e["payload"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("plan incompleto")));
+}
+
+#[test]
+fn sin_recuperador_el_techo_vale_por_consulta_y_no_por_coleccion() {
+    let path = common::crear_corpus_sintetico();
+    // Más coincidencias que el techo en cada una de las dos colecciones.
+    common::agregar_chunks(&path, "c-conflicto", 12, "huelga general en el puerto");
+    common::agregar_chunks(&path, "c-volantes", 12, "huelga general en el puerto");
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("techo-lexico-artifacts");
+    let plan = json!({"queries":["huelga"],"bibliography_queries":[],"retrieval_limit":16});
+    let m = PlanPropio {
+        base: modelo(false, false),
+        plan: plan.clone(),
+        replan: plan,
+    };
+    let s = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto","c-volantes"],"max_llm_calls":30,"max_cost":1.0})).unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr_con(&db, &repo, &m, None, &dir, &id);
+
+    let consultas = eventos(&out, "query");
+    assert!(!consultas.is_empty());
+    for c in &consultas {
+        assert_eq!(c["payload"]["pipeline"], "lexica", "{c}");
+        assert!(
+            c["payload"]["retrieved"].as_u64().unwrap() <= 16,
+            "la consulta recuperó más que el techo: {c}"
+        );
+    }
+    // El techo se alcanza: hay coincidencias de sobra en el recorte.
+    assert!(
+        consultas.iter().any(|c| c["payload"]["retrieved"] == 16),
+        "{consultas:?}"
     );
 }
 
