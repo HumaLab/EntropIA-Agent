@@ -6,21 +6,31 @@ trabajo de Fase 7 sin commitear.
 
 ## Resumen y orden sugerido
 
-| # | Pendiente | Tipo | Tamaño | Depende de |
+| # | Pendiente | Tipo | Tamaño | Estado |
 |---|---|---|---|---|
-| 1 | Límites de recuperación: por búsqueda (promete 100, entrega 16) y por plan (20 fijo) | Defecto de contrato | Chico-mediano | — |
-| 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | — |
-| 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | 2 (parcialmente) |
-| 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | — |
-| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | 2 |
-| 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | — |
+| 1 | Límites de recuperación: por búsqueda (promete 100, entrega 16) y por plan (20 fijo) | Defecto de contrato | Chico-mediano | **Resuelto** (`3ac3915`, `2e6f2f5`) |
+| 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | **Resuelto** con otro diseño (`bbc5457`, `a244f47`; UI en Pro-Lite `c7b59a3`) |
+| 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | Primera pasada en Lite hecha; faltan gates y Pro |
+| 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | Abierto |
+| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | Abierto (ya no depende de nada) |
+| 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | Abierto |
 
-Orden propuesto: **#1** primero (chico, independiente, cierra una promesa falsa del
-contrato); después una **aceptación parcial de Fase 7** (#3, lo que no depende de
-gates) para detectar temprano los defectos que solo ve el consumidor; luego **#2** y el
-cierre de #3; **#4** y **#5** después. **#6** no tiene consecuencias hoy: se resuelve
-cuando aparezca el primer consumidor de esa columna o junto con otra migración del
-ledger.
+**Estado al 2026-09-11 (tarde).**
+- #1 y #2 están en `main` de los dos repos y publicados; el pin del motor en Pro-Lite apunta a
+  `b53b21f` (`25a8635`, movido por el bot con CI).
+- #2 no siguió la propuesta de abajo: quedaron **dos paradas** (la ronda muestra el diseño y
+  permite editarlo, y un gate sobre el plan final), «editar es aprobar» y sin auto-aprobación.
+  El diseño vigente está en `docs/superpowers/specs/2026-09-11-gates-fase6-design.md`. La UI de
+  gates no se restauró: nunca había existido, se construyó.
+- #3: los 8 escenarios de la primera pasada funcionan en Lite y quedaron verificados en
+  `estado.sqlite` (pausa manual y reinicio sin repetir etapas terminadas). Falta la segunda pasada
+  (gate del plan con reinicio, editar búsquedas, aprobar) y la variante Pro.
+
+Orden propuesto para lo que queda: cerrar **#3** (segunda pasada con gates, después Pro);
+luego **#4**, que además fija los números hoy provisorios (tope de consultas de
+`trayectorias`, profundidad de recuperación, umbrales de una eventual auto-aprobación);
+después **#5**. **#6** no tiene consecuencias hoy: se resuelve cuando aparezca el primer
+consumidor de esa columna o junto con otra migración del ledger.
 
 ---
 
