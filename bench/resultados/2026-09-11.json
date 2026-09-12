@@ -1,0 +1,168 @@
+{
+  "banco": "entropia-bench-v1",
+  "pipeline": "solo_lexico",
+  "nota": "sin recuperador híbrido: solo se midió la línea base léxica (FTS5); retrieval_recall no se midió",
+  "k": 16,
+  "alcance": [
+    "84ed443a-bb41-4f72-b854-8269b123b9d4",
+    "c07dece8-130b-452d-b16a-c15d29dcf732",
+    "674f4607-dc2c-44ba-96ce-e882ca07a825",
+    "b7fa1eef-6643-41fb-b0cf-7684b13331f6",
+    "a85da3b4-10da-44fd-b415-86d28748b0d9",
+    "a1dd938e-8288-44db-a7cf-a263303090db",
+    "66a0aba5-a908-4dda-9223-85fdca5b22e5",
+    "9b878c05-97c4-4cdb-b91b-1045e918dc80",
+    "1315d1fe-97d2-4526-8b32-74ac5e9959b0",
+    "3a286589-4c5a-445e-a819-4003f16f7321",
+    "1b64cad4-91ef-4ac8-a23d-d95a5f5cc075"
+  ],
+  "cadenas": [
+    {
+      "pregunta_id": "soip-001",
+      "cobertura_items_esperados": 1.0,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-002",
+      "cobertura_items_esperados": 1.0,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-003",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-004",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-005",
+      "cobertura_items_esperados": 1.0,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": 0.0,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-006",
+      "cobertura_items_esperados": 1.0,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": 0.0,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-007",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-008",
+      "cobertura_items_esperados": 1.0,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-009",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-010",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-011",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    },
+    {
+      "pregunta_id": "soip-012",
+      "cobertura_items_esperados": null,
+      "retrieval_recall": null,
+      "retrieval_recall_lexico": null,
+      "evidence_recall": null,
+      "citation_precision": null,
+      "claim_support": null,
+      "answer_quality": null
+    }
+  ],
+  "resumen": {
+    "cobertura_items_esperados": {
+      "media": 1.0,
+      "aplicables": 5,
+      "total": 12
+    },
+    "retrieval_recall": {
+      "media": null,
+      "aplicables": 0,
+      "total": 12
+    },
+    "retrieval_recall_lexico": {
+      "media": 0.0,
+      "aplicables": 2,
+      "total": 12
+    },
+    "evidence_recall": {
+      "media": null,
+      "aplicables": 0,
+      "total": 12
+    },
+    "citation_precision": {
+      "media": null,
+      "aplicables": 0,
+      "total": 12
+    }
+  }
+}
