@@ -6,7 +6,9 @@
 //! para mí». Las preguntas se anclan solo a items con chunks: preguntar por
 //! material no procesado mide la brecha de Lite/Pro, no al agente.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::recuperacion::{Recuperador, RERANK_DEPTH};
 
 /// Una pregunta del banco, anclada a evidencia procesada.
 #[derive(Debug, Clone, Deserialize)]
@@ -37,17 +39,23 @@ pub fn cargar_banco(path: &str) -> Result<BancoBench, String> {
 ///
 /// Encabeza la cobertura: si el item esperado no tenía chunks, el fallo es de
 /// Lite/Pro (o del recorte), no del agente.
-#[derive(Debug, Clone, Default)]
+///
+/// Cada métrica es `None` cuando no aplica (la pregunta no declara esperados)
+/// o no se midió: un 1.0 por defecto infla el promedio con preguntas que no
+/// prueban nada.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CadenaAtribucion {
     pub pregunta_id: String,
     /// Fracción de items esperados que tienen chunks (lo que el agente podía ver).
-    pub cobertura_items_esperados: f64,
-    /// Fracción de chunks esperados que recupera el gateway (pierna léxica).
-    pub retrieval_recall: f64,
+    pub cobertura_items_esperados: Option<f64>,
+    /// Fracción de chunks esperados que devuelve la recuperación híbrida.
+    pub retrieval_recall: Option<f64>,
+    /// Línea base léxica (FTS5) a la misma profundidad que la híbrida.
+    pub retrieval_recall_lexico: Option<f64>,
     /// Fracción de chunks esperados citados en la respuesta.
-    pub evidence_recall: f64,
+    pub evidence_recall: Option<f64>,
     /// Fracción de citas de la respuesta que están entre los esperados.
-    pub citation_precision: f64,
+    pub citation_precision: Option<f64>,
     /// Fracción de claims supported por el Verifier (opcional).
     pub claim_support: Option<f64>,
     /// Calidad de respuesta por LLM-as-judge (opcional, no determinista).
@@ -62,11 +70,23 @@ impl CadenaAtribucion {
     }
 }
 
-/// Evalúa la respuesta del agente contra la pregunta y la evidencia esperada.
+/// Alcance que recibe un usuario que marca «seleccionar todo»: cada colección
+/// fuera de la denylist. No sale de los items esperados: eso filtraría la
+/// respuesta al recuperador.
+pub fn alcance_seleccionar_todo(repo: &crate::repositorio::RepositorioSqlite) -> Vec<String> {
+    repo.listar_colecciones()
+        .into_iter()
+        .map(|c| c.id)
+        .collect()
+}
+
+/// Evalúa una pregunta: la recuperación siempre y, si se pasa la respuesta
+/// (sus chunks citados), también la evidencia de esa respuesta.
 pub fn evaluar(
     repo: &crate::repositorio::RepositorioSqlite,
+    recuperador: Option<&Recuperador>,
     pregunta: &PreguntaBench,
-    chunks_citados: &[String],
+    respuesta: Option<&[String]>,
 ) -> CadenaAtribucion {
     // Cobertura: ¿los items esperados tienen chunks?
     let con_chunks = pregunta
@@ -75,20 +95,39 @@ pub fn evaluar(
         .filter(|id| item_tiene_chunks(repo, id))
         .count();
     let cobertura = if pregunta.items_esperados.is_empty() {
-        1.0 // sin items esperados, la cobertura no acota el juicio
+        None // sin items esperados, la cobertura no acota el juicio
     } else {
-        con_chunks as f64 / pregunta.items_esperados.len() as f64
+        Some(con_chunks as f64 / pregunta.items_esperados.len() as f64)
     };
 
-    // Retrieval: pierna léxica del gateway sobre el texto de la pregunta.
-    let recuperados = repo.buscar_fts5(&pregunta.pregunta, 50);
-    let retrieval_recall = recall(&pregunta.chunk_ids_esperados, &recuperados);
+    // Recuperación híbrida del flujo, a su profundidad y en su alcance. Si la
+    // pregunta no declara chunks esperados no se consulta: sería una llamada
+    // paga para una métrica que no aplica.
+    let retrieval_recall = recuperador
+        .filter(|_| !pregunta.chunk_ids_esperados.is_empty())
+        .and_then(|rec| {
+            let alcance = alcance_seleccionar_todo(repo);
+            let recuperados: Vec<String> = rec
+                .recuperar_en_colecciones(repo, &pregunta.pregunta, &alcance, RERANK_DEPTH)
+                .fragmentos
+                .into_iter()
+                .map(|f| f.chunk_id)
+                .collect();
+            recall(&pregunta.chunk_ids_esperados, &recuperados)
+        });
 
-    // Evidence recall y citation precision sobre las citas de la respuesta.
-    let evidence_recall = recall(&pregunta.chunk_ids_esperados, chunks_citados);
-    let citation_precision = if chunks_citados.is_empty() {
-        0.0
-    } else {
+    // Línea base léxica a la profundidad del flujo, no a una más generosa.
+    let lexicos = repo.buscar_fts5(&pregunta.pregunta, RERANK_DEPTH);
+    let retrieval_recall_lexico = recall(&pregunta.chunk_ids_esperados, &lexicos);
+
+    // Evidence recall y citation precision sobre las citas de la respuesta;
+    // sin respuesta (solo recuperación) no hay citas que medir.
+    let evidence_recall =
+        respuesta.and_then(|citados| recall(&pregunta.chunk_ids_esperados, citados));
+    let citation_precision = respuesta.map(|chunks_citados| {
+        if chunks_citados.is_empty() {
+            return 0.0;
+        }
         let esperados: std::collections::HashSet<&String> =
             pregunta.chunk_ids_esperados.iter().collect();
         let citas_validas = chunks_citados
@@ -96,12 +135,13 @@ pub fn evaluar(
             .filter(|c| esperados.contains(c))
             .count();
         citas_validas as f64 / chunks_citados.len() as f64
-    };
+    });
 
     CadenaAtribucion {
         pregunta_id: pregunta.id.clone(),
         cobertura_items_esperados: cobertura,
         retrieval_recall,
+        retrieval_recall_lexico,
         evidence_recall,
         citation_precision,
         claim_support: None,
@@ -109,13 +149,106 @@ pub fn evaluar(
     }
 }
 
-fn recall(esperados: &[String], obtenidos: &[String]) -> f64 {
+fn recall(esperados: &[String], obtenidos: &[String]) -> Option<f64> {
     if esperados.is_empty() {
-        return 1.0; // sin esperados, no hay recall que medir
+        return None; // sin esperados, no hay recall que medir
     }
     let set: std::collections::HashSet<&String> = obtenidos.iter().collect();
     let encontrados = esperados.iter().filter(|e| set.contains(e)).count();
-    encontrados as f64 / esperados.len() as f64
+    Some(encontrados as f64 / esperados.len() as f64)
+}
+
+/// Promedio de una métrica sobre las preguntas donde aplica.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Agregado {
+    /// `None` si ninguna pregunta aplica.
+    pub media: Option<f64>,
+    /// Preguntas donde la métrica aplica (entran al promedio).
+    pub aplicables: usize,
+    /// Preguntas evaluadas.
+    pub total: usize,
+}
+
+/// Resumen del banco: cada métrica con su cantidad de preguntas aplicables, para
+/// que «1 de 12» se vea en vez de esconderse en un promedio.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResumenBench {
+    pub cobertura_items_esperados: Agregado,
+    pub retrieval_recall: Agregado,
+    pub retrieval_recall_lexico: Agregado,
+    pub evidence_recall: Agregado,
+    pub citation_precision: Agregado,
+}
+
+/// Resume las cadenas promediando cada métrica solo donde aplica.
+pub fn resumir(cadenas: &[CadenaAtribucion]) -> ResumenBench {
+    let agregar = |metrica: fn(&CadenaAtribucion) -> Option<f64>| {
+        let valores: Vec<f64> = cadenas.iter().filter_map(metrica).collect();
+        Agregado {
+            media: (!valores.is_empty())
+                .then(|| valores.iter().sum::<f64>() / valores.len() as f64),
+            aplicables: valores.len(),
+            total: cadenas.len(),
+        }
+    };
+    ResumenBench {
+        cobertura_items_esperados: agregar(|c| c.cobertura_items_esperados),
+        retrieval_recall: agregar(|c| c.retrieval_recall),
+        retrieval_recall_lexico: agregar(|c| c.retrieval_recall_lexico),
+        evidence_recall: agregar(|c| c.evidence_recall),
+        citation_precision: agregar(|c| c.citation_precision),
+    }
+}
+
+/// Corrida del banco solo sobre la recuperación, tal como se guarda en
+/// `bench/resultados/`. Declara con qué pipeline, a qué profundidad y en qué
+/// alcance se midió: sin eso dos corridas no se pueden comparar.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResultadoBench {
+    pub banco: String,
+    /// `hibrido` o `solo_lexico`.
+    pub pipeline: String,
+    /// Qué quedó sin medir, si algo quedó.
+    pub nota: Option<String>,
+    /// Profundidad de recuperación por pregunta.
+    pub k: usize,
+    /// Colecciones consultadas: «seleccionar todo» menos la denylist.
+    pub alcance: Vec<String>,
+    pub cadenas: Vec<CadenaAtribucion>,
+    pub resumen: ResumenBench,
+}
+
+/// Evalúa el banco entero solo sobre la recuperación (sin respuesta del
+/// agente). Sin recuperador mide únicamente la línea base léxica, y lo declara.
+pub fn correr_recuperacion(
+    repo: &crate::repositorio::RepositorioSqlite,
+    recuperador: Option<&Recuperador>,
+    banco: &BancoBench,
+) -> ResultadoBench {
+    let cadenas: Vec<CadenaAtribucion> = banco
+        .preguntas
+        .iter()
+        .map(|p| evaluar(repo, recuperador, p, None))
+        .collect();
+    let resumen = resumir(&cadenas);
+    ResultadoBench {
+        banco: banco.banco.clone(),
+        pipeline: if recuperador.is_some() {
+            "hibrido"
+        } else {
+            "solo_lexico"
+        }
+        .into(),
+        nota: recuperador.is_none().then(|| {
+            "sin recuperador híbrido: solo se midió la línea base léxica (FTS5); \
+             retrieval_recall no se midió"
+                .to_string()
+        }),
+        k: RERANK_DEPTH,
+        alcance: alcance_seleccionar_todo(repo),
+        cadenas,
+        resumen,
+    }
 }
 
 /// ¿El item tiene al menos un chunk en el corpus (recorte real)?
@@ -167,14 +300,11 @@ mod tests {
         let p = pregunta(vec!["chunk-1".into(), "chunk-2".into()]);
         // La respuesta cita chunk-1 (correcto) y chunk-stress-1 (de prueba, no
         // esperado): evidence_recall 0.5, citation_precision 0.5.
-        let cadena = evaluar(
-            &r,
-            &p,
-            &["chunk-1".to_string(), "chunk-stress-1".to_string()],
-        );
-        assert_eq!(cadena.evidence_recall, 0.5);
-        assert_eq!(cadena.citation_precision, 0.5);
-        assert_eq!(cadena.cobertura_items_esperados, 1.0); // item-1 tiene chunks
+        let citas = ["chunk-1".to_string(), "chunk-stress-1".to_string()];
+        let cadena = evaluar(&r, None, &p, Some(citas.as_slice()));
+        assert_eq!(cadena.evidence_recall, Some(0.5));
+        assert_eq!(cadena.citation_precision, Some(0.5));
+        assert_eq!(cadena.cobertura_items_esperados, Some(1.0)); // item-1 tiene chunks
     }
 
     #[test]
@@ -182,18 +312,136 @@ mod tests {
         let r = repo();
         let mut p = pregunta(vec![]);
         p.items_esperados = vec!["item-3".into()]; // sin chunks en el corpus sintético
-        let cadena = evaluar(&r, &p, &[]);
-        assert_eq!(cadena.cobertura_items_esperados, 0.0);
-        // Sin esperados de chunk, recall no penaliza.
-        assert_eq!(cadena.retrieval_recall, 1.0);
+        let cadena = evaluar(&r, None, &p, None);
+        assert_eq!(cadena.cobertura_items_esperados, Some(0.0));
+        // Sin esperados de chunk, el recall no aplica: ni penaliza ni suma.
+        assert_eq!(cadena.retrieval_recall_lexico, None);
+    }
+
+    #[test]
+    fn sin_chunks_esperados_el_recall_no_aplica_y_el_resumen_lo_excluye() {
+        let r = repo();
+        let mut sin_esperados = pregunta(vec![]);
+        sin_esperados.items_esperados = vec![];
+        let mut con_esperados = pregunta(vec!["chunk-1".into()]);
+        con_esperados.id = "test-2".into();
+        con_esperados.pregunta = "huelga".into();
+
+        let sin = evaluar(&r, None, &sin_esperados, None);
+        // Sin esperados no hay nada que medir: «no aplica», no un 1.0 regalado.
+        assert_eq!(sin.retrieval_recall, None);
+        assert_eq!(sin.retrieval_recall_lexico, None);
+        assert_eq!(sin.cobertura_items_esperados, None);
+
+        let con = evaluar(&r, None, &con_esperados, None);
+        assert_eq!(con.retrieval_recall_lexico, Some(1.0));
+
+        let resumen = resumir(&[sin, con]);
+        assert_eq!(resumen.retrieval_recall_lexico.media, Some(1.0));
+        assert_eq!(resumen.retrieval_recall_lexico.aplicables, 1);
+        assert_eq!(resumen.retrieval_recall_lexico.total, 2);
+    }
+
+    /// Embedder de prueba: vector alineado con los embeddings del corpus
+    /// sintético, para ejercitar la pierna semántica sin salir a la red.
+    struct EmbedFijo;
+    impl crate::recuperacion::Embedder for EmbedFijo {
+        fn embed(&self, _: &str) -> Result<Vec<f32>, String> {
+            Ok(vec![1.0, 0.0])
+        }
+    }
+
+    /// Reranker de prueba: conserva el orden de la fusión.
+    struct RerankIdentidad;
+    impl crate::recuperacion::Reranker for RerankIdentidad {
+        fn rerank(
+            &self,
+            _: &str,
+            docs: &[String],
+            limite: usize,
+        ) -> Result<Vec<(usize, f64)>, String> {
+            Ok((0..docs.len().min(limite)).map(|i| (i, 1.0)).collect())
+        }
+    }
+
+    #[test]
+    fn el_recall_de_recuperacion_sale_del_pipeline_hibrido_dentro_del_alcance() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedFijo), Box::new(RerankIdentidad));
+
+        // Ningún token de la pregunta está en el corpus: la línea léxica no
+        // trae nada y solo la pierna semántica puede encontrar chunk-1.
+        let mut p = pregunta(vec!["chunk-1".into()]);
+        p.pregunta = "conflicto portuario".into();
+        let cadena = evaluar(&r, Some(&rec), &p, None);
+        assert_eq!(cadena.retrieval_recall, Some(1.0));
+        assert_eq!(cadena.retrieval_recall_lexico, Some(0.0));
+
+        // El alcance es «seleccionar todo» menos la denylist: un chunk de una
+        // colección de prueba nunca cuenta como recuperado.
+        let alcance = alcance_seleccionar_todo(&r);
+        assert!(alcance.contains(&"c-conflicto".to_string()));
+        assert!(!alcance.iter().any(|c| c.starts_with("c-stress")));
+        let mut de_prueba = pregunta(vec!["chunk-stress-1".into()]);
+        de_prueba.pregunta = "huelga simulada de stress".into();
+        let cadena = evaluar(&r, Some(&rec), &de_prueba, None);
+        assert_eq!(cadena.retrieval_recall, Some(0.0));
+    }
+
+    #[test]
+    fn sin_respuesta_la_evidencia_no_se_mide() {
+        let r = repo();
+        let p = pregunta(vec!["chunk-1".into()]);
+        // Solo recuperación: no hay respuesta que haya citado nada, y un 0.0
+        // la acusaría de no citar.
+        let cadena = evaluar(&r, None, &p, None);
+        assert_eq!(cadena.evidence_recall, None);
+        assert_eq!(cadena.citation_precision, None);
+    }
+
+    #[test]
+    fn el_resultado_declara_pipeline_profundidad_y_resumen_en_json() {
+        let r = repo();
+        let mut sin_esperados = pregunta(vec![]);
+        sin_esperados.items_esperados = vec![];
+        let mut con_esperados = pregunta(vec!["chunk-1".into()]);
+        con_esperados.id = "test-2".into();
+        con_esperados.pregunta = "huelga".into();
+        let banco = BancoBench {
+            banco: "banco-prueba".into(),
+            preguntas: vec![sin_esperados, con_esperados],
+        };
+
+        // Sin recuperador: solo la línea base léxica, y el resultado lo dice.
+        let json = serde_json::to_value(correr_recuperacion(&r, None, &banco)).unwrap();
+        assert_eq!(json["banco"], "banco-prueba");
+        assert_eq!(json["pipeline"], "solo_lexico");
+        assert!(json["nota"].as_str().unwrap().contains("línea base léxica"));
+        assert_eq!(json["k"], RERANK_DEPTH);
+        assert!(json["alcance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "c-conflicto"));
+        assert_eq!(json["cadenas"].as_array().unwrap().len(), 2);
+        assert_eq!(json["resumen"]["retrieval_recall"]["aplicables"], 0);
+        assert_eq!(json["resumen"]["retrieval_recall_lexico"]["aplicables"], 1);
+        assert_eq!(json["resumen"]["retrieval_recall_lexico"]["total"], 2);
+        assert_eq!(json["resumen"]["retrieval_recall_lexico"]["media"], 1.0);
+
+        let rec = Recuperador::con_clientes(Box::new(EmbedFijo), Box::new(RerankIdentidad));
+        let json = serde_json::to_value(correr_recuperacion(&r, Some(&rec), &banco)).unwrap();
+        assert_eq!(json["pipeline"], "hibrido");
+        assert_eq!(json["resumen"]["retrieval_recall"]["aplicables"], 1);
     }
 
     #[test]
     fn las_citas_de_colecciones_excluidas_no_cuentan_como_precision() {
         let r = repo();
         let p = pregunta(vec!["chunk-1".into()]);
-        let cadena = evaluar(&r, &p, &["chunk-stress-1".to_string()]);
-        assert_eq!(cadena.evidence_recall, 0.0);
-        assert_eq!(cadena.citation_precision, 0.0);
+        let citas = ["chunk-stress-1".to_string()];
+        let cadena = evaluar(&r, None, &p, Some(citas.as_slice()));
+        assert_eq!(cadena.evidence_recall, Some(0.0));
+        assert_eq!(cadena.citation_precision, Some(0.0));
     }
 }
