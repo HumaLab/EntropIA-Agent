@@ -109,6 +109,106 @@
       "items_esperados": [],
       "chunk_ids_esperados": [],
       "respuesta_referencia": "Se superficie una relación pendiente de juicio (conflicts_with) y el juez —historiador o agente— la resuelve."
+    },
+    {
+      "id": "soip-013",
+      "nivel": 1,
+      "tipo": "cifras",
+      "pregunta": "¿Qué reclamaban los obreros en huelga de las fábricas de conservas de pescado de las firmas Capalbo y Pisani?",
+      "items_esperados": ["ac409c39-3809-477e-9446-d9aef396695d", "939230f9-1454-4b22-8480-a5b00055a3d6"],
+      "chunk_ids_esperados": ["ragchk-aac44ef0b79b86ecfd900f7bc94eccd5da7c70d47fdcaa752c42796de32274b3", "ragchk-f774e3fe795705111b902f955a84ea6b7075a3d10d894514cbf751d1ae012e37"],
+      "grupos_esperados": [["ragchk-aac44ef0b79b86ecfd900f7bc94eccd5da7c70d47fdcaa752c42796de32274b3", "ragchk-f774e3fe795705111b902f955a84ea6b7075a3d10d894514cbf751d1ae012e37"]],
+      "respuesta_referencia": "El pago de setenta centavos por cajón de anchoíta y una mayor higiene en los locales de trabajo."
+    },
+    {
+      "id": "soip-014",
+      "nivel": 1,
+      "tipo": "contenido",
+      "pregunta": "¿Qué agrupación formaron unos vecinos para defenderse del alza del costo de la vida, y qué seccional sindical los respaldaba?",
+      "items_esperados": ["9764989a-ccfc-441f-932a-46cbefc5853c", "b91c9e97-4042-41b0-8ef5-2968211f2d4c"],
+      "chunk_ids_esperados": ["ragchk-f1899803fd28672f7908f77048f5583d4c4006bcb7bbeb793a86af8613454d42", "ragchk-9131128323e44f361550b4c0959a2947c4f1af484befb915fe1a4a6505ec583b", "ragchk-d4c612e2ee0d8529d858e0f81d92c6324e4448a2c2094d2742f633aa104490d2", "ragchk-b2744f1bdde50eba4bfb50875a649d0412428d3e436074a5adcc1bd455e2bfbb"],
+      "grupos_esperados": [["ragchk-f1899803fd28672f7908f77048f5583d4c4006bcb7bbeb793a86af8613454d42", "ragchk-d4c612e2ee0d8529d858e0f81d92c6324e4448a2c2094d2742f633aa104490d2"], ["ragchk-9131128323e44f361550b4c0959a2947c4f1af484befb915fe1a4a6505ec583b", "ragchk-b2744f1bdde50eba4bfb50875a649d0412428d3e436074a5adcc1bd455e2bfbb"]],
+      "respuesta_referencia": "La Agrupación de Vecinos Pro Defensa de Salarios (La Providencia), avalada por la Seccional A.O.M.A. La Providencia."
+    },
+    {
+      "id": "soip-015",
+      "nivel": 2,
+      "tipo": "trayectorias",
+      "pregunta": "¿Quién fue el interventor del sindicato del pescado de Mar del Plata en 1966 y qué norma dispuso la intervención?",
+      "items_esperados": ["5c3e0f60-60aa-473b-857c-698df1c5c241"],
+      "chunk_ids_esperados": ["ragchk-29290d02c6a41006fa3babd2d9e4cf2ba8bc8305cda367db9a23856a454fcb1d", "ragchk-fed5cb55b046b6cfc405798e7b00327b17d0f50a7ef27a2d5f4fb22334c0eeac", "ragchk-537d0d4614cdf7c159ab1d5832c2578554bff65ecf42d20d41faef9a47bbe6cc"],
+      "grupos_esperados": [["ragchk-29290d02c6a41006fa3babd2d9e4cf2ba8bc8305cda367db9a23856a454fcb1d", "ragchk-537d0d4614cdf7c159ab1d5832c2578554bff65ecf42d20d41faef9a47bbe6cc", "ragchk-fed5cb55b046b6cfc405798e7b00327b17d0f50a7ef27a2d5f4fb22334c0eeac"], ["ragchk-fed5cb55b046b6cfc405798e7b00327b17d0f50a7ef27a2d5f4fb22334c0eeac"]],
+      "respuesta_referencia": "José Ibáñez; la intervención la dispuso el Decreto Nº 719 del Gobierno de la Nación, del 12 de agosto de 1966."
+    },
+    {
+      "id": "soip-016",
+      "nivel": 2,
+      "tipo": "trayectorias",
+      "pregunta": "¿Cuántas organizaciones gremiales participaron del plenario de la CGT marplatense que en abril de 1965 dispuso un paro en solidaridad con los fileteros, y quién lo presidió?",
+      "items_esperados": ["4d60e8b0-152b-4b7a-97a9-c7f2ebf86be9", "30b1e9a1-33f9-465c-8552-a24a63dcad78"],
+      "chunk_ids_esperados": ["ragchk-ef5c9600a196f80122688846894cf19c45b261291ff7554d66ec4ef4bd322d33", "ragchk-d7311fb3bf903e7aebabfc1b63d2c49ec5adc2aaba7f770738dc056dea8413bf"],
+      "grupos_esperados": [["ragchk-ef5c9600a196f80122688846894cf19c45b261291ff7554d66ec4ef4bd322d33"], ["ragchk-d7311fb3bf903e7aebabfc1b63d2c49ec5adc2aaba7f770738dc056dea8413bf"]],
+      "respuesta_referencia": "Representantes de 33 organizaciones gremiales; lo presidió el delegado regional Pedro Verón."
+    },
+    {
+      "id": "soip-017",
+      "nivel": 2,
+      "tipo": "cronologia",
+      "pregunta": "¿Cuándo se extendió a todo el país la zona de actuación del Sindicato Obrero de la Industria de la Alimentación, y quién avaló ese pedido?",
+      "items_esperados": ["530ffbce-e865-4232-9daf-1f54bfb2f5c3"],
+      "chunk_ids_esperados": ["ragchk-874418b8fa5732cb44f2a4d08e0102bf84c4dae144769f69c1e2e481b930013a", "ragchk-a117c0c20d16bf8274545d15ec44ccaea55c7f25e1caa2fff2bdc600db4a6c87"],
+      "grupos_esperados": [["ragchk-874418b8fa5732cb44f2a4d08e0102bf84c4dae144769f69c1e2e481b930013a"], ["ragchk-a117c0c20d16bf8274545d15ec44ccaea55c7f25e1caa2fff2bdc600db4a6c87"]],
+      "respuesta_referencia": "Por la Resolución M. Nº 54 del 14 de abril de 1954 (extensión a todo el territorio de la Nación); el pedido lo avaló la Confederación General del Trabajo."
+    },
+    {
+      "id": "soip-018",
+      "nivel": 2,
+      "tipo": "contenido",
+      "pregunta": "¿En qué fábrica de conservas trabajó Alcira González de Ferreira siendo menor de edad, y qué tarea hacía?",
+      "items_esperados": ["40cc79a5-5f5c-4588-82e6-f05def55caad", "b2691b2b-fdfe-4057-89c4-f717d5ff06c7", "86c68dc2-4c9a-4970-9a94-483300d94b1e"],
+      "chunk_ids_esperados": ["ragchk-118591cf8d0245ab76851c3d58a4459014fc2b4a2aecd3620c69a098c4d4a4dd", "ragchk-9c4dd824ef1a1cda7cfee10195569c21101dce208ed0073f1c411bfd4749ad74", "ragchk-042d47388dcfd1029416d9bfce0be24ef565112bb5ea3613331a0c9b26920a8a", "ragchk-513eeef3716b925c3a49beee7e63d32670be77e87e2dde7559259a07fab5af09", "ragchk-48be4de688847f915e83ae0b2e025bf0dacb5ebb0bee5f70378b377766fc13bb", "ragchk-152d37bd4e6a06c2e3dc8a5935a014cc02f39298f8893f39078adff558d4fde0"],
+      "grupos_esperados": [["ragchk-118591cf8d0245ab76851c3d58a4459014fc2b4a2aecd3620c69a098c4d4a4dd", "ragchk-042d47388dcfd1029416d9bfce0be24ef565112bb5ea3613331a0c9b26920a8a", "ragchk-48be4de688847f915e83ae0b2e025bf0dacb5ebb0bee5f70378b377766fc13bb"], ["ragchk-9c4dd824ef1a1cda7cfee10195569c21101dce208ed0073f1c411bfd4749ad74", "ragchk-513eeef3716b925c3a49beee7e63d32670be77e87e2dde7559259a07fab5af09", "ragchk-152d37bd4e6a06c2e3dc8a5935a014cc02f39298f8893f39078adff558d4fde0"]],
+      "respuesta_referencia": "En La Campañola, hacia 1952-53, con 14 años; ponía las latas de conserva ya cerradas en cajas y les pegaba la etiqueta."
+    },
+    {
+      "id": "soip-019",
+      "nivel": 3,
+      "tipo": "cifras",
+      "pregunta": "Durante el conflicto de 1940 entre pescadores e industriales de Mar del Plata, ¿cuánto ofrecían pagar los fabricantes de conservas por cajón de anchoíta en su telegrama al ministro de Agricultura, y en qué precio quedó finalmente resuelto?",
+      "items_esperados": ["8631a8b4-3ebf-4e7e-aa48-eb655d098509", "e406ec13-4ad1-419e-8f3d-d8c85a77fc63"],
+      "chunk_ids_esperados": ["ragchk-f81ec9001760497149188ec76088def25a687acf73a0057b54ffba7141d6102b", "ragchk-f1782ba181588dd052e5c47b2cdb08830363a46b43571acfd3b12ae3327bcf4e"],
+      "grupos_esperados": [["ragchk-f81ec9001760497149188ec76088def25a687acf73a0057b54ffba7141d6102b"], ["ragchk-f1782ba181588dd052e5c47b2cdb08830363a46b43571acfd3b12ae3327bcf4e"]],
+      "respuesta_referencia": "Ofrecían cuatro pesos por cajón de 40 kilos (hasta cien mil cajones); el conflicto se solucionó en $ 4,50 por cajón de 40 kilos, con compra mínima de 100.000 cajones."
+    },
+    {
+      "id": "soip-020",
+      "nivel": 3,
+      "tipo": "lugares",
+      "pregunta": "¿Qué domicilio tenía en Mar del Plata el sindicato de los obreros mosaístas?",
+      "items_esperados": ["47243211-c144-483f-888b-5d894851b9e9", "3c504671-d987-430e-985f-e7b2e8affc83"],
+      "chunk_ids_esperados": ["ragchk-062a60c8e44daef71085816d37d651a068fa6fd422c83c47aa5e6f86281f5cc1", "ragchk-70ec52d78440529722347bf32ebe61033290490be62db4d1a464570c55f87dc1"],
+      "grupos_esperados": [["ragchk-062a60c8e44daef71085816d37d651a068fa6fd422c83c47aa5e6f86281f5cc1", "ragchk-70ec52d78440529722347bf32ebe61033290490be62db4d1a464570c55f87dc1"]],
+      "respuesta_referencia": "Olazábal 1470: allí sesionaba la filial 35 del Sindicato Regional de Obreros Mosaístas y Afines, y es el domicilio que consigna la resolución que otorga personería gremial al Sindicato Regional Obrero Mosaísta."
+    },
+    {
+      "id": "soip-021",
+      "nivel": 3,
+      "tipo": "cronologia",
+      "pregunta": "¿Durante cuánto tiempo permaneció cerrada la Biblioteca Juventud Moderna tras la clausura de la Casa del Pueblo, y qué gobernador firmó el decreto de expropiación?",
+      "items_esperados": ["50950c0b-854b-4d59-98eb-d6fb5f08e89d"],
+      "chunk_ids_esperados": ["ragchk-e3c3e136485fb28bc854ac808c78905c2c1de75807ccf0935ceefd312600421f", "ragchk-833146cf65963653a531c47649742d19ae4e8ff6b6760ccb9b9cb1f3cf357c2f", "ragchk-75d1238ca6183e581e6cd5517caac7391bba68e39d488d5e0c12d16c1ead460f"],
+      "grupos_esperados": [["ragchk-e3c3e136485fb28bc854ac808c78905c2c1de75807ccf0935ceefd312600421f", "ragchk-833146cf65963653a531c47649742d19ae4e8ff6b6760ccb9b9cb1f3cf357c2f"], ["ragchk-75d1238ca6183e581e6cd5517caac7391bba68e39d488d5e0c12d16c1ead460f"]],
+      "respuesta_referencia": "Del 16 de diciembre de 1947 al 29 de septiembre de 1948; el decreto de expropiación Nº 23358 lo firmó el ex gobernador Domingo A. Mercante."
+    },
+    {
+      "id": "soip-022",
+      "nivel": 3,
+      "tipo": "trayectorias",
+      "pregunta": "¿Qué cargos ocupó Héctor Woollands en organizaciones obreras y libertarias de Mar del Plata?",
+      "items_esperados": ["dabd92d9-50fe-4d0d-9dcc-2eab140cdb01", "f20bbdcd-f561-4dee-b4a9-6dc5bdd86b1f", "e91fd45d-8bd6-481d-90b8-eb002a17d99a"],
+      "chunk_ids_esperados": ["ragchk-07d04d139d21b95896971d47cfc8b27d34febd0af570534045a0f524ba47de7a", "ragchk-94ea0bb3c99b7c023933de14c68653087bef5829aeb0fdac84826b83ac4ab582", "ragchk-2157c8f82cce7ddcce9ea30ae666a3feb7731aa3a1699517368cb20bc645eb95"],
+      "grupos_esperados": [["ragchk-07d04d139d21b95896971d47cfc8b27d34febd0af570534045a0f524ba47de7a"], ["ragchk-94ea0bb3c99b7c023933de14c68653087bef5829aeb0fdac84826b83ac4ab582", "ragchk-2157c8f82cce7ddcce9ea30ae666a3feb7731aa3a1699517368cb20bc645eb95"]],
+      "respuesta_referencia": "En enero de 1948 era prosecretario del Consejo Administrativo de la Unión Obrera Local de Sindicatos Autónomos; en 1985 firmaba como secretario de la Agrupación Libertaria Mar del Plata (una de las copias transcribe «Woylands»)."
     }
   ]
 }

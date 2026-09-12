@@ -20,6 +20,26 @@ pub struct PreguntaBench {
     pub items_esperados: Vec<String>,
     pub chunk_ids_esperados: Vec<String>,
     pub respuesta_referencia: String,
+    /// Grupos de evidencia: cada grupo reúne chunks alternativos que aportan la
+    /// misma pieza (copias del mismo documento en otra colección); basta uno.
+    /// Todos los grupos son necesarios. Vacío: un grupo por chunk esperado.
+    #[serde(default)]
+    pub grupos_esperados: Vec<Vec<String>>,
+}
+
+impl PreguntaBench {
+    /// Grupos de evidencia efectivos: los declarados o, si no hay, uno por chunk
+    /// esperado (así se mide el banco que no declara grupos).
+    fn grupos_evidencia(&self) -> Vec<Vec<String>> {
+        if self.grupos_esperados.is_empty() {
+            self.chunk_ids_esperados
+                .iter()
+                .map(|c| vec![c.clone()])
+                .collect()
+        } else {
+            self.grupos_esperados.clone()
+        }
+    }
 }
 
 /// Banco de preguntas (archivo JSON).
@@ -48,11 +68,12 @@ pub struct CadenaAtribucion {
     pub pregunta_id: String,
     /// Fracción de items esperados que tienen chunks (lo que el agente podía ver).
     pub cobertura_items_esperados: Option<f64>,
-    /// Fracción de chunks esperados que devuelve la recuperación híbrida.
+    /// Fracción de grupos de evidencia esperados que cubre la recuperación
+    /// híbrida (un grupo se cubre con cualquiera de sus chunks).
     pub retrieval_recall: Option<f64>,
     /// Línea base léxica (FTS5) a la misma profundidad que la híbrida.
     pub retrieval_recall_lexico: Option<f64>,
-    /// Fracción de chunks esperados citados en la respuesta.
+    /// Fracción de grupos de evidencia esperados cubiertos por las citas.
     pub evidence_recall: Option<f64>,
     /// Fracción de citas de la respuesta que están entre los esperados.
     pub citation_precision: Option<f64>,
@@ -100,30 +121,31 @@ pub fn evaluar(
         Some(con_chunks as f64 / pregunta.items_esperados.len() as f64)
     };
 
+    // Los tres recall se miden sobre grupos de evidencia: dos copias del mismo
+    // documento no exigen recuperar las dos.
+    let grupos = pregunta.grupos_evidencia();
+
     // Recuperación híbrida del flujo, a su profundidad y en su alcance. Si la
     // pregunta no declara chunks esperados no se consulta: sería una llamada
     // paga para una métrica que no aplica.
-    let retrieval_recall = recuperador
-        .filter(|_| !pregunta.chunk_ids_esperados.is_empty())
-        .and_then(|rec| {
-            let alcance = alcance_seleccionar_todo(repo);
-            let recuperados: Vec<String> = rec
-                .recuperar_en_colecciones(repo, &pregunta.pregunta, &alcance, RERANK_DEPTH)
-                .fragmentos
-                .into_iter()
-                .map(|f| f.chunk_id)
-                .collect();
-            recall(&pregunta.chunk_ids_esperados, &recuperados)
-        });
+    let retrieval_recall = recuperador.filter(|_| !grupos.is_empty()).and_then(|rec| {
+        let alcance = alcance_seleccionar_todo(repo);
+        let recuperados: Vec<String> = rec
+            .recuperar_en_colecciones(repo, &pregunta.pregunta, &alcance, RERANK_DEPTH)
+            .fragmentos
+            .into_iter()
+            .map(|f| f.chunk_id)
+            .collect();
+        recall(&grupos, &recuperados)
+    });
 
     // Línea base léxica a la profundidad del flujo, no a una más generosa.
     let lexicos = repo.buscar_fts5(&pregunta.pregunta, RERANK_DEPTH);
-    let retrieval_recall_lexico = recall(&pregunta.chunk_ids_esperados, &lexicos);
+    let retrieval_recall_lexico = recall(&grupos, &lexicos);
 
     // Evidence recall y citation precision sobre las citas de la respuesta;
     // sin respuesta (solo recuperación) no hay citas que medir.
-    let evidence_recall =
-        respuesta.and_then(|citados| recall(&pregunta.chunk_ids_esperados, citados));
+    let evidence_recall = respuesta.and_then(|citados| recall(&grupos, citados));
     let citation_precision = respuesta.map(|chunks_citados| {
         if chunks_citados.is_empty() {
             return 0.0;
@@ -149,13 +171,17 @@ pub fn evaluar(
     }
 }
 
-fn recall(esperados: &[String], obtenidos: &[String]) -> Option<f64> {
-    if esperados.is_empty() {
+/// Fracción de grupos de evidencia con al menos un chunk entre los obtenidos.
+fn recall(grupos: &[Vec<String>], obtenidos: &[String]) -> Option<f64> {
+    if grupos.is_empty() {
         return None; // sin esperados, no hay recall que medir
     }
     let set: std::collections::HashSet<&String> = obtenidos.iter().collect();
-    let encontrados = esperados.iter().filter(|e| set.contains(e)).count();
-    Some(encontrados as f64 / esperados.len() as f64)
+    let cubiertos = grupos
+        .iter()
+        .filter(|grupo| grupo.iter().any(|c| set.contains(c)))
+        .count();
+    Some(cubiertos as f64 / grupos.len() as f64)
 }
 
 /// Promedio de una métrica sobre las preguntas donde aplica.
@@ -281,6 +307,7 @@ mod tests {
             items_esperados: vec!["item-1".into()],
             chunk_ids_esperados: chunk_ids,
             respuesta_referencia: "x".into(),
+            grupos_esperados: vec![],
         }
     }
 
@@ -292,6 +319,36 @@ mod tests {
         let niveles: std::collections::HashSet<u8> =
             banco.preguntas.iter().map(|p| p.nivel).collect();
         assert!(niveles.contains(&1) && niveles.contains(&2) && niveles.contains(&3));
+    }
+
+    #[test]
+    fn los_grupos_del_banco_real_cubren_exactamente_sus_chunks_esperados() {
+        let banco = cargar_banco("bench/preguntas.json").expect("el banco debe existir en el repo");
+        let mut ids = std::collections::HashSet::new();
+        for p in &banco.preguntas {
+            assert!(
+                ids.insert(p.id.as_str()),
+                "id repetido en el banco: {}",
+                p.id
+            );
+            if p.grupos_esperados.is_empty() {
+                continue;
+            }
+            // Un chunk puede estar en varios grupos: si sostiene dos partes de
+            // la respuesta, encontrarlo satisface a las dos.
+            let mut en_grupos = std::collections::HashSet::new();
+            for grupo in &p.grupos_esperados {
+                assert!(!grupo.is_empty(), "{}: grupo vacío", p.id);
+                en_grupos.extend(grupo);
+            }
+            let esperados: std::collections::HashSet<&String> =
+                p.chunk_ids_esperados.iter().collect();
+            assert_eq!(
+                en_grupos, esperados,
+                "{}: los grupos deben cubrir exactamente los chunks esperados",
+                p.id
+            );
+        }
     }
 
     #[test]
@@ -433,6 +490,63 @@ mod tests {
         let json = serde_json::to_value(correr_recuperacion(&r, Some(&rec), &banco)).unwrap();
         assert_eq!(json["pipeline"], "hibrido");
         assert_eq!(json["resumen"]["retrieval_recall"]["aplicables"], 1);
+    }
+
+    #[test]
+    fn dos_copias_del_mismo_documento_en_un_grupo_basta_recuperar_una() {
+        let r = repo();
+        // chunk-1 y chunk-2 son copias del mismo documento (defecto del corpus):
+        // un solo grupo de evidencia, cualquiera de las dos lo satisface.
+        let mut p = pregunta(vec!["chunk-1".into(), "chunk-2".into()]);
+        p.pregunta = "huelga".into(); // la línea léxica solo trae chunk-1
+        p.grupos_esperados = vec![vec!["chunk-1".into(), "chunk-2".into()]];
+        let citas = ["chunk-1".to_string()];
+        let cadena = evaluar(&r, None, &p, Some(citas.as_slice()));
+        assert_eq!(cadena.retrieval_recall_lexico, Some(1.0));
+        assert_eq!(cadena.evidence_recall, Some(1.0));
+    }
+
+    #[test]
+    fn dos_grupos_de_evidencia_con_un_solo_acierto_miden_la_mitad() {
+        let r = repo();
+        // Dos piezas distintas de la respuesta: la primera tiene dos copias
+        // (chunk-1, chunk-3), la segunda una (chunk-2). La línea léxica solo
+        // trae chunk-1: cubre un grupo de dos, no un chunk de tres.
+        let mut p = pregunta(vec!["chunk-1".into(), "chunk-3".into(), "chunk-2".into()]);
+        p.pregunta = "huelga".into();
+        p.grupos_esperados = vec![
+            vec!["chunk-1".into(), "chunk-3".into()],
+            vec!["chunk-2".into()],
+        ];
+        let cadena = evaluar(&r, None, &p, None);
+        assert_eq!(cadena.retrieval_recall_lexico, Some(0.5));
+    }
+
+    #[test]
+    fn un_chunk_que_sostiene_dos_partes_satisface_los_dos_grupos() {
+        let r = repo();
+        // chunk-1 trae las dos piezas de la respuesta; chunk-2 solo la
+        // primera. Recuperar chunk-1 cubre la respuesta entera.
+        let mut p = pregunta(vec!["chunk-1".into(), "chunk-2".into()]);
+        p.pregunta = "huelga".into(); // la línea léxica solo trae chunk-1
+        p.grupos_esperados = vec![
+            vec!["chunk-2".into(), "chunk-1".into()],
+            vec!["chunk-1".into()],
+        ];
+        let cadena = evaluar(&r, None, &p, None);
+        assert_eq!(cadena.retrieval_recall_lexico, Some(1.0));
+    }
+
+    #[test]
+    fn sin_grupos_declarados_cada_chunk_esperado_es_su_propio_grupo() {
+        let r = repo();
+        // Banco sin grupos: se mide como antes, un grupo por chunk esperado.
+        let mut p = pregunta(vec!["chunk-1".into(), "chunk-2".into()]);
+        p.pregunta = "huelga".into(); // la línea léxica solo trae chunk-1
+        let citas = ["chunk-1".to_string()];
+        let cadena = evaluar(&r, None, &p, Some(citas.as_slice()));
+        assert_eq!(cadena.retrieval_recall_lexico, Some(0.5));
+        assert_eq!(cadena.evidence_recall, Some(0.5));
     }
 
     #[test]

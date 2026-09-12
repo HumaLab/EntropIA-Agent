@@ -1,6 +1,8 @@
 /target
 .env
 /informes/
+# Página local de revisión de candidatas: se genera, no se versiona.
+bench/candidatas/*-revision.html
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
