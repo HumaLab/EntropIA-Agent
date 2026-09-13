@@ -1,0 +1,1583 @@
+{
+  "alcance": [
+    "84ed443a-bb41-4f72-b854-8269b123b9d4",
+    "c07dece8-130b-452d-b16a-c15d29dcf732",
+    "674f4607-dc2c-44ba-96ce-e882ca07a825",
+    "b7fa1eef-6643-41fb-b0cf-7684b13331f6",
+    "a85da3b4-10da-44fd-b415-86d28748b0d9",
+    "a1dd938e-8288-44db-a7cf-a263303090db",
+    "66a0aba5-a908-4dda-9223-85fdca5b22e5",
+    "9b878c05-97c4-4cdb-b91b-1045e918dc80",
+    "1315d1fe-97d2-4526-8b32-74ac5e9959b0",
+    "3a286589-4c5a-445e-a819-4003f16f7321",
+    "1b64cad4-91ef-4ac8-a23d-d95a5f5cc075"
+  ],
+  "banco": "entropia-bench-v1",
+  "diagnosticos": [
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-e0ce218677d08dc3cace2d9c09e708a49ab505755768e2073331526accd26447"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 3,
+          "vectorial": 5
+        }
+      ],
+      "pregunta_id": "soip-005",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-540ab519fc43d2d427b8a235618af77a9d8199d2727a1387dac17265d5a6f1cf"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 3,
+          "vectorial": 2
+        }
+      ],
+      "pregunta_id": "soip-006",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-aac44ef0b79b86ecfd900f7bc94eccd5da7c70d47fdcaa752c42796de32274b3",
+            "ragchk-f774e3fe795705111b902f955a84ea6b7075a3d10d894514cbf751d1ae012e37"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 3,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-013",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-f1899803fd28672f7908f77048f5583d4c4006bcb7bbeb793a86af8613454d42",
+            "ragchk-d4c612e2ee0d8529d858e0f81d92c6324e4448a2c2094d2742f633aa104490d2"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 1,
+          "vectorial": 1
+        },
+        {
+          "chunks": [
+            "ragchk-9131128323e44f361550b4c0959a2947c4f1af484befb915fe1a4a6505ec583b",
+            "ragchk-b2744f1bdde50eba4bfb50875a649d0412428d3e436074a5adcc1bd455e2bfbb"
+          ],
+          "fusion": 3,
+          "fusion_leg_k_simulado": 3,
+          "lexica": 4,
+          "vectorial": 4
+        }
+      ],
+      "pregunta_id": "soip-014",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-29290d02c6a41006fa3babd2d9e4cf2ba8bc8305cda367db9a23856a454fcb1d",
+            "ragchk-537d0d4614cdf7c159ab1d5832c2578554bff65ecf42d20d41faef9a47bbe6cc",
+            "ragchk-fed5cb55b046b6cfc405798e7b00327b17d0f50a7ef27a2d5f4fb22334c0eeac"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 1,
+          "vectorial": 1
+        },
+        {
+          "chunks": [
+            "ragchk-fed5cb55b046b6cfc405798e7b00327b17d0f50a7ef27a2d5f4fb22334c0eeac"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 2,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-015",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-ef5c9600a196f80122688846894cf19c45b261291ff7554d66ec4ef4bd322d33"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 3,
+          "vectorial": 2
+        },
+        {
+          "chunks": [
+            "ragchk-d7311fb3bf903e7aebabfc1b63d2c49ec5adc2aaba7f770738dc056dea8413bf"
+          ],
+          "fusion": 4,
+          "fusion_leg_k_simulado": 4,
+          "lexica": 6,
+          "vectorial": 4
+        }
+      ],
+      "pregunta_id": "soip-016",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-874418b8fa5732cb44f2a4d08e0102bf84c4dae144769f69c1e2e481b930013a"
+          ],
+          "fusion": 6,
+          "fusion_leg_k_simulado": 6,
+          "lexica": 5,
+          "vectorial": 7
+        },
+        {
+          "chunks": [
+            "ragchk-a117c0c20d16bf8274545d15ec44ccaea55c7f25e1caa2fff2bdc600db4a6c87"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 1,
+          "vectorial": 5
+        }
+      ],
+      "pregunta_id": "soip-017",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-118591cf8d0245ab76851c3d58a4459014fc2b4a2aecd3620c69a098c4d4a4dd",
+            "ragchk-042d47388dcfd1029416d9bfce0be24ef565112bb5ea3613331a0c9b26920a8a",
+            "ragchk-48be4de688847f915e83ae0b2e025bf0dacb5ebb0bee5f70378b377766fc13bb"
+          ],
+          "fusion": 4,
+          "fusion_leg_k_simulado": 4,
+          "lexica": 3,
+          "vectorial": 9
+        },
+        {
+          "chunks": [
+            "ragchk-9c4dd824ef1a1cda7cfee10195569c21101dce208ed0073f1c411bfd4749ad74",
+            "ragchk-513eeef3716b925c3a49beee7e63d32670be77e87e2dde7559259a07fab5af09",
+            "ragchk-152d37bd4e6a06c2e3dc8a5935a014cc02f39298f8893f39078adff558d4fde0"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 1,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-018",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-f81ec9001760497149188ec76088def25a687acf73a0057b54ffba7141d6102b"
+          ],
+          "fusion": 3,
+          "fusion_leg_k_simulado": 3,
+          "lexica": 7,
+          "vectorial": 3
+        },
+        {
+          "chunks": [
+            "ragchk-f1782ba181588dd052e5c47b2cdb08830363a46b43571acfd3b12ae3327bcf4e"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 1,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-019",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-062a60c8e44daef71085816d37d651a068fa6fd422c83c47aa5e6f86281f5cc1",
+            "ragchk-70ec52d78440529722347bf32ebe61033290490be62db4d1a464570c55f87dc1"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 3,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-020",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-e3c3e136485fb28bc854ac808c78905c2c1de75807ccf0935ceefd312600421f",
+            "ragchk-833146cf65963653a531c47649742d19ae4e8ff6b6760ccb9b9cb1f3cf357c2f"
+          ],
+          "fusion": 8,
+          "fusion_leg_k_simulado": 8,
+          "lexica": 6,
+          "vectorial": 6
+        },
+        {
+          "chunks": [
+            "ragchk-75d1238ca6183e581e6cd5517caac7391bba68e39d488d5e0c12d16c1ead460f"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 2,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-021",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-07d04d139d21b95896971d47cfc8b27d34febd0af570534045a0f524ba47de7a"
+          ],
+          "fusion": 1,
+          "fusion_leg_k_simulado": 1,
+          "lexica": 1,
+          "vectorial": 2
+        },
+        {
+          "chunks": [
+            "ragchk-94ea0bb3c99b7c023933de14c68653087bef5829aeb0fdac84826b83ac4ab582",
+            "ragchk-2157c8f82cce7ddcce9ea30ae666a3feb7731aa3a1699517368cb20bc645eb95"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 2,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-022",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-f16709171a5108a12c3993d68fc26e377973f29d260100aa5e326e3a2757f37c"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": null,
+          "lexica": null,
+          "vectorial": null
+        },
+        {
+          "chunks": [
+            "ragchk-80262177734c21c66d6936dd81c7af0fd7d6bbb49992ae6f3b660ea2495603c8"
+          ],
+          "fusion": 4,
+          "fusion_leg_k_simulado": 15,
+          "lexica": 1,
+          "vectorial": null
+        }
+      ],
+      "pregunta_id": "soip-023",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-d41ae909e08c3ba756194ecdbf9ac845dd5e1f821d6d473270e1456d27da7493",
+            "ragchk-4948d140b70af09adda3518903a3042d4071b366a4a1b243717bd62d5cc7e1b0"
+          ],
+          "fusion": 4,
+          "fusion_leg_k_simulado": 7,
+          "lexica": null,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-024",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-20cffaa4cfdb0b3b459fa7de7cca6efd2f28ef73419e6e43f87ccd858a6d1cf2"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 5,
+          "vectorial": 2
+        },
+        {
+          "chunks": [
+            "ragchk-1e0cc538f339b09db303dccc9937ef65f4b24812f4e609d735269079bb3c9edb",
+            "ragchk-1fb3afc6c3fbd2686c73a74c0f848571056e07a5eaf66ae0124be424e176746c"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": null,
+          "lexica": null,
+          "vectorial": 26
+        }
+      ],
+      "pregunta_id": "soip-025",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-c53b18d83a931076c5fef11634454b4dcd604695d048838e0b0b0a9f3501bf42"
+          ],
+          "fusion": 10,
+          "fusion_leg_k_simulado": 17,
+          "lexica": null,
+          "vectorial": 3
+        }
+      ],
+      "pregunta_id": "soip-026",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-552bac8ba45d6f13e697d4a2c2b6cff37463ff8bd4e983f12e92ea40d01c3033",
+            "ragchk-2e077b082f903e97f883e9e3942e6dca414a9441b01745a245265000412b4e03"
+          ],
+          "fusion": 3,
+          "fusion_leg_k_simulado": 3,
+          "lexica": 13,
+          "vectorial": 6
+        }
+      ],
+      "pregunta_id": "soip-027",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-6c6f7efaba6e753ba38cb5c56b72cc7cb5a4b996463f1aa140d7fbbc0510865e",
+            "ragchk-0ab8b17396400d4497784a1507f63e13cce7b1e0a5a37d611a984dde1154d630",
+            "ragchk-9ff23d1d313c6491a520947ed6320d0285e4da2af61d7f87551fbea7c3ea6dcc"
+          ],
+          "fusion": 6,
+          "fusion_leg_k_simulado": 5,
+          "lexica": 37,
+          "vectorial": 1
+        }
+      ],
+      "pregunta_id": "soip-028",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-9ca187e1b712ac4519fd76c6caff4df56ac738df7ad66563b2313ba19bdf77b8",
+            "ragchk-93a714d7301a359285fb76ae87b6adec2c2fc1244de5948e3b0c580928cfe2bf"
+          ],
+          "fusion": 6,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 10,
+          "vectorial": 2
+        }
+      ],
+      "pregunta_id": "soip-029",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-c3af4de7773f3c8256af448c2a22dc735e638352151d094aa60a8734be137768"
+          ],
+          "fusion": 17,
+          "fusion_leg_k_simulado": 21,
+          "lexica": null,
+          "vectorial": 7
+        },
+        {
+          "chunks": [
+            "ragchk-4bbf7fac2528308a221644c7682c015c0078f5082fd57cc8c92d8ce576ddff6a"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": 7,
+          "lexica": 36,
+          "vectorial": 35
+        }
+      ],
+      "pregunta_id": "soip-030",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.0
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-c6b50a840aa8e761a702cc5517ff75b57b5ca634ae107e2a17d8e2ab846aea62",
+            "ragchk-a3b41811feacf0eb9a125dd19ef9242b139d22dd443fb79edd44afc40a7eb158",
+            "ragchk-6717147cdad53b675b9246957836f34584c2b49a12ad4dd20b5a0c12200a1006"
+          ],
+          "fusion": 5,
+          "fusion_leg_k_simulado": 9,
+          "lexica": 23,
+          "vectorial": 23
+        },
+        {
+          "chunks": [
+            "ragchk-c6b50a840aa8e761a702cc5517ff75b57b5ca634ae107e2a17d8e2ab846aea62"
+          ],
+          "fusion": 5,
+          "fusion_leg_k_simulado": 9,
+          "lexica": 23,
+          "vectorial": 23
+        }
+      ],
+      "pregunta_id": "soip-031",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 1.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 1.0
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a",
+            "ragchk-8b643ab60d52757aaf422dd45677390f8f02770fa2191397c223aa5632f6c5e3"
+          ],
+          "fusion": 33,
+          "fusion_leg_k_simulado": 36,
+          "lexica": null,
+          "vectorial": 17
+        },
+        {
+          "chunks": [
+            "ragchk-bc7009bc0fd968f1409b97d434ba97c85f2d6334ac3040e4265d14386e59210b",
+            "ragchk-bc72b9606d6adb84adefe6dd7df0c68eb946a3775c70b4649dc2edc07e4d4dce"
+          ],
+          "fusion": 34,
+          "fusion_leg_k_simulado": 10,
+          "lexica": 39,
+          "vectorial": 18
+        },
+        {
+          "chunks": [
+            "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": null,
+          "lexica": null,
+          "vectorial": 44
+        }
+      ],
+      "pregunta_id": "soip-032",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.0
+        },
+        {
+          "k": 24,
+          "recall": 0.0
+        },
+        {
+          "k": 32,
+          "recall": 0.0
+        },
+        {
+          "k": 48,
+          "recall": 0.6666666666666666
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.3333333333333333
+        },
+        {
+          "k": 24,
+          "recall": 0.3333333333333333
+        },
+        {
+          "k": 32,
+          "recall": 0.3333333333333333
+        },
+        {
+          "k": 48,
+          "recall": 0.6666666666666666
+        }
+      ]
+    }
+  ],
+  "ks": [
+    8,
+    16,
+    24,
+    32,
+    48
+  ],
+  "leg_k": 24,
+  "nota": "posiciones por pierna exactas: hasta LEG_K=24 están dentro del flujo. f y recall_fusion salen de la fusión del flujo (piernas de LEG_K, el pool real); recall_fusion_leg_k_simulado fusiona piernas de 48 y simula subir LEG_K. Sin rerank.",
+  "pipeline": "hibrido_sin_rerank",
+  "rerank_depth": 16,
+  "resumen": {
+    "recall_fusion": [
+      {
+        "k": 8,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.8181818181818182,
+          "total": 22
+        }
+      },
+      {
+        "k": 16,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.8636363636363636,
+          "total": 22
+        }
+      },
+      {
+        "k": 24,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.8863636363636364,
+          "total": 22
+        }
+      },
+      {
+        "k": 32,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.8863636363636364,
+          "total": 22
+        }
+      },
+      {
+        "k": 48,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.9166666666666667,
+          "total": 22
+        }
+      }
+    ],
+    "recall_fusion_leg_k_simulado": [
+      {
+        "k": 8,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.7727272727272727,
+          "total": 22
+        }
+      },
+      {
+        "k": 16,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.856060606060606,
+          "total": 22
+        }
+      },
+      {
+        "k": 24,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.9242424242424242,
+          "total": 22
+        }
+      },
+      {
+        "k": 32,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.9242424242424242,
+          "total": 22
+        }
+      },
+      {
+        "k": 48,
+        "recall": {
+          "aplicables": 22,
+          "media": 0.9393939393939394,
+          "total": 22
+        }
+      }
+    ]
+  }
+}
