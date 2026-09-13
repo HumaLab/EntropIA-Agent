@@ -1,0 +1,403 @@
+{
+  "alcance": [
+    "84ed443a-bb41-4f72-b854-8269b123b9d4",
+    "c07dece8-130b-452d-b16a-c15d29dcf732",
+    "674f4607-dc2c-44ba-96ce-e882ca07a825",
+    "b7fa1eef-6643-41fb-b0cf-7684b13331f6",
+    "a85da3b4-10da-44fd-b415-86d28748b0d9",
+    "a1dd938e-8288-44db-a7cf-a263303090db",
+    "66a0aba5-a908-4dda-9223-85fdca5b22e5",
+    "9b878c05-97c4-4cdb-b91b-1045e918dc80",
+    "1315d1fe-97d2-4526-8b32-74ac5e9959b0",
+    "3a286589-4c5a-445e-a819-4003f16f7321",
+    "1b64cad4-91ef-4ac8-a23d-d95a5f5cc075"
+  ],
+  "banco": "entropia-bench-v1",
+  "diagnosticos": [
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-f16709171a5108a12c3993d68fc26e377973f29d260100aa5e326e3a2757f37c"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": null,
+          "lexica": null,
+          "vectorial": null
+        },
+        {
+          "chunks": [
+            "ragchk-80262177734c21c66d6936dd81c7af0fd7d6bbb49992ae6f3b660ea2495603c8"
+          ],
+          "fusion": 4,
+          "fusion_leg_k_simulado": 15,
+          "lexica": 1,
+          "vectorial": null
+        }
+      ],
+      "pregunta_id": "soip-023",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-20cffaa4cfdb0b3b459fa7de7cca6efd2f28ef73419e6e43f87ccd858a6d1cf2"
+          ],
+          "fusion": 2,
+          "fusion_leg_k_simulado": 2,
+          "lexica": 5,
+          "vectorial": 2
+        },
+        {
+          "chunks": [
+            "ragchk-1e0cc538f339b09db303dccc9937ef65f4b24812f4e609d735269079bb3c9edb",
+            "ragchk-1fb3afc6c3fbd2686c73a74c0f848571056e07a5eaf66ae0124be424e176746c"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": null,
+          "lexica": null,
+          "vectorial": 26
+        }
+      ],
+      "pregunta_id": "soip-025",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-c3af4de7773f3c8256af448c2a22dc735e638352151d094aa60a8734be137768"
+          ],
+          "fusion": 17,
+          "fusion_leg_k_simulado": 21,
+          "lexica": null,
+          "vectorial": 7
+        },
+        {
+          "chunks": [
+            "ragchk-4bbf7fac2528308a221644c7682c015c0078f5082fd57cc8c92d8ce576ddff6a"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": 7,
+          "lexica": 36,
+          "vectorial": 35
+        }
+      ],
+      "pregunta_id": "soip-030",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.0
+        },
+        {
+          "k": 24,
+          "recall": 0.5
+        },
+        {
+          "k": 32,
+          "recall": 0.5
+        },
+        {
+          "k": 48,
+          "recall": 0.5
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.5
+        },
+        {
+          "k": 16,
+          "recall": 0.5
+        },
+        {
+          "k": 24,
+          "recall": 1.0
+        },
+        {
+          "k": 32,
+          "recall": 1.0
+        },
+        {
+          "k": 48,
+          "recall": 1.0
+        }
+      ]
+    },
+    {
+      "degradacion": null,
+      "grupos": [
+        {
+          "chunks": [
+            "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a",
+            "ragchk-8b643ab60d52757aaf422dd45677390f8f02770fa2191397c223aa5632f6c5e3"
+          ],
+          "fusion": 33,
+          "fusion_leg_k_simulado": 36,
+          "lexica": null,
+          "vectorial": 17
+        },
+        {
+          "chunks": [
+            "ragchk-bc7009bc0fd968f1409b97d434ba97c85f2d6334ac3040e4265d14386e59210b",
+            "ragchk-bc72b9606d6adb84adefe6dd7df0c68eb946a3775c70b4649dc2edc07e4d4dce"
+          ],
+          "fusion": 34,
+          "fusion_leg_k_simulado": 10,
+          "lexica": 39,
+          "vectorial": 18
+        },
+        {
+          "chunks": [
+            "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a"
+          ],
+          "fusion": null,
+          "fusion_leg_k_simulado": null,
+          "lexica": null,
+          "vectorial": 44
+        }
+      ],
+      "pregunta_id": "soip-032",
+      "profundidad": 48,
+      "recall_fusion": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.0
+        },
+        {
+          "k": 24,
+          "recall": 0.0
+        },
+        {
+          "k": 32,
+          "recall": 0.0
+        },
+        {
+          "k": 48,
+          "recall": 0.6666666666666666
+        }
+      ],
+      "recall_fusion_leg_k_simulado": [
+        {
+          "k": 8,
+          "recall": 0.0
+        },
+        {
+          "k": 16,
+          "recall": 0.3333333333333333
+        },
+        {
+          "k": 24,
+          "recall": 0.3333333333333333
+        },
+        {
+          "k": 32,
+          "recall": 0.3333333333333333
+        },
+        {
+          "k": 48,
+          "recall": 0.6666666666666666
+        }
+      ]
+    }
+  ],
+  "ks": [
+    8,
+    16,
+    24,
+    32,
+    48
+  ],
+  "leg_k": 24,
+  "nota": "posiciones por pierna exactas: hasta LEG_K=24 están dentro del flujo. f y recall_fusion salen de la fusión del flujo (piernas de LEG_K, el pool real); recall_fusion_leg_k_simulado fusiona piernas de 48 y simula subir LEG_K. Sin rerank.",
+  "pipeline": "hibrido_sin_rerank",
+  "rerank_depth": 16,
+  "resumen": {
+    "recall_fusion": [
+      {
+        "k": 8,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.25,
+          "total": 4
+        }
+      },
+      {
+        "k": 16,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.25,
+          "total": 4
+        }
+      },
+      {
+        "k": 24,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.375,
+          "total": 4
+        }
+      },
+      {
+        "k": 32,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.375,
+          "total": 4
+        }
+      },
+      {
+        "k": 48,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.5416666666666666,
+          "total": 4
+        }
+      }
+    ],
+    "recall_fusion_leg_k_simulado": [
+      {
+        "k": 8,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.25,
+          "total": 4
+        }
+      },
+      {
+        "k": 16,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.4583333333333333,
+          "total": 4
+        }
+      },
+      {
+        "k": 24,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.5833333333333334,
+          "total": 4
+        }
+      },
+      {
+        "k": 32,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.5833333333333334,
+          "total": 4
+        }
+      },
+      {
+        "k": 48,
+        "recall": {
+          "aplicables": 4,
+          "media": 0.6666666666666666,
+          "total": 4
+        }
+      }
+    ]
+  }
+}
