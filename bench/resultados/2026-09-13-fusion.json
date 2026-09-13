@@ -1,0 +1,1325 @@
+{
+  "alcance": [
+    "84ed443a-bb41-4f72-b854-8269b123b9d4",
+    "c07dece8-130b-452d-b16a-c15d29dcf732",
+    "674f4607-dc2c-44ba-96ce-e882ca07a825",
+    "b7fa1eef-6643-41fb-b0cf-7684b13331f6",
+    "a85da3b4-10da-44fd-b415-86d28748b0d9",
+    "a1dd938e-8288-44db-a7cf-a263303090db",
+    "66a0aba5-a908-4dda-9223-85fdca5b22e5",
+    "9b878c05-97c4-4cdb-b91b-1045e918dc80",
+    "1315d1fe-97d2-4526-8b32-74ac5e9959b0",
+    "3a286589-4c5a-445e-a819-4003f16f7321",
+    "1b64cad4-91ef-4ac8-a23d-d95a5f5cc075"
+  ],
+  "banco": "entropia-bench-v1",
+  "evaluaciones": [
+    {
+      "k": 8,
+      "pesos": [
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 1.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8181818181818182,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.6,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 1.5,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.7954545454545454,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.55,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 2.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.7954545454545454,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.55,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 3.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.7954545454545454,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.55,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 0.0,
+          "peso_vectorial": 1.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.7954545454545454,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 0.9583333333333334,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.6,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 0.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.5909090909090909,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.1,
+                "total": 10
+              }
+            }
+          ]
+        }
+      ],
+      "preguntas": [
+        {
+          "pregunta_id": "soip-005",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-006",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-013",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-014",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-015",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-016",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-017",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-018",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.5,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-019",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-020",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-021",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-022",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-023",
+          "recall": [
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ]
+        },
+        {
+          "pregunta_id": "soip-024",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-025",
+          "recall": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        {
+          "pregunta_id": "soip-026",
+          "recall": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-027",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-028",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-029",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-030",
+          "recall": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-031",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-032",
+          "recall": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "k": 16,
+      "pesos": [
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 1.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8636363636363636,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 1.5,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8636363636363636,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 2.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8636363636363636,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 3.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8636363636363636,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 0.0,
+          "peso_vectorial": 1.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8181818181818182,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.6,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 0.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.6818181818181818,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.3,
+                "total": 10
+              }
+            }
+          ]
+        }
+      ],
+      "preguntas": [
+        {
+          "pregunta_id": "soip-005",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-006",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-013",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-014",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-015",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-016",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-017",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-018",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-019",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-020",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-021",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-022",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-023",
+          "recall": [
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ]
+        },
+        {
+          "pregunta_id": "soip-024",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-025",
+          "recall": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        {
+          "pregunta_id": "soip-026",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-027",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-028",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-029",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-030",
+          "recall": [
+            0.0,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-031",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-032",
+          "recall": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "k": 24,
+      "pesos": [
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 1.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.8863636363636364,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.75,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 1.5,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.893939393939394,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7666666666666667,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 2.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.893939393939394,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7666666666666667,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 3.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.893939393939394,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7666666666666667,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 0.0,
+          "peso_vectorial": 1.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.893939393939394,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.7666666666666667,
+                "total": 10
+              }
+            }
+          ]
+        },
+        {
+          "peso_lexico": 1.0,
+          "peso_vectorial": 0.0,
+          "recall": {
+            "aplicables": 22,
+            "media": 0.7272727272727273,
+            "total": 22
+          },
+          "subconjuntos": [
+            {
+              "nombre": "fáciles",
+              "recall": {
+                "aplicables": 12,
+                "media": 1.0,
+                "total": 12
+              }
+            },
+            {
+              "nombre": "difíciles",
+              "recall": {
+                "aplicables": 10,
+                "media": 0.4,
+                "total": 10
+              }
+            }
+          ]
+        }
+      ],
+      "preguntas": [
+        {
+          "pregunta_id": "soip-005",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-006",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-013",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-014",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-015",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-016",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-017",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-018",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-019",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-020",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-021",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-022",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-023",
+          "recall": [
+            0.5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ]
+        },
+        {
+          "pregunta_id": "soip-024",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-025",
+          "recall": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        {
+          "pregunta_id": "soip-026",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-027",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-028",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-029",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-030",
+          "recall": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-031",
+          "recall": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "pregunta_id": "soip-032",
+          "recall": [
+            0.0,
+            0.6666666666666666,
+            0.6666666666666666,
+            0.6666666666666666,
+            0.6666666666666666,
+            0.0
+          ]
+        }
+      ]
+    }
+  ],
+  "leg_k": 24,
+  "nota": "recall de grupos de evidencia en los primeros k de la fusión RRF ponderada, sin rerank; pesos (vectorial, léxico), el primero es el de producción",
+  "pesos": [
+    [
+      1.0,
+      1.0
+    ],
+    [
+      1.5,
+      1.0
+    ],
+    [
+      2.0,
+      1.0
+    ],
+    [
+      3.0,
+      1.0
+    ],
+    [
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0
+    ]
+  ],
+  "piernas": "bench/resultados\\2026-09-13-piernas.json",
+  "rrf_k": 60,
+  "subconjuntos": [
+    {
+      "nombre": "fáciles",
+      "preguntas": [
+        "soip-001",
+        "soip-002",
+        "soip-003",
+        "soip-004",
+        "soip-005",
+        "soip-006",
+        "soip-007",
+        "soip-008",
+        "soip-009",
+        "soip-010",
+        "soip-011",
+        "soip-012",
+        "soip-013",
+        "soip-014",
+        "soip-015",
+        "soip-016",
+        "soip-017",
+        "soip-018",
+        "soip-019",
+        "soip-020",
+        "soip-021",
+        "soip-022"
+      ]
+    },
+    {
+      "nombre": "difíciles",
+      "preguntas": [
+        "soip-023",
+        "soip-024",
+        "soip-025",
+        "soip-026",
+        "soip-027",
+        "soip-028",
+        "soip-029",
+        "soip-030",
+        "soip-031",
+        "soip-032"
+      ]
+    }
+  ]
+}
