@@ -26,6 +26,10 @@ pub fn render(artifact: &Value) -> String {
     out.push_str(&advertencia_cobertura(&artifact["coverage_warning"]));
     out.push_str(&encuadre(&artifact["clarification"]));
 
+    // La lista automática vive en la sección de limitaciones del redactor si la
+    // escribió: dos títulos «Limitaciones» serían el mismo capítulo partido.
+    let lista = lineas_limitaciones(artifact);
+    let mut lista_emitida = false;
     for section in report["sections"].as_array().into_iter().flatten() {
         let titulo = section["title"].as_str().unwrap_or("Sección");
         out.push_str(&format!("## {titulo}\n\n"));
@@ -49,9 +53,19 @@ pub fn render(artifact: &Value) -> String {
         for quote in section["quotes"].as_array().into_iter().flatten() {
             out.push_str(&bloque_cita(quote));
         }
+        if es_limitaciones(titulo) && !lista_emitida {
+            out.push_str(&vinetas(&lista));
+            lista_emitida = true;
+        }
     }
 
-    out.push_str(&limitaciones(artifact));
+    if !lista_emitida {
+        let pendientes = vinetas(&lista);
+        if !pendientes.is_empty() {
+            out.push_str("## Limitaciones\n\n");
+            out.push_str(&pendientes);
+        }
+    }
     out.push_str(&fuentes_citadas(&report["references"]));
     out
 }
@@ -220,7 +234,7 @@ fn pie_referencia(r: &Value) -> String {
     partes.join(" · ")
 }
 
-fn limitaciones(artifact: &Value) -> String {
+fn lineas_limitaciones(artifact: &Value) -> Vec<String> {
     let mut lineas: Vec<String> = Vec::new();
     for l in artifact["archive_limitations"]
         .as_array()
@@ -264,10 +278,23 @@ fn limitaciones(artifact: &Value) -> String {
             "**Degradación del pipeline:** {error} ({rol}{veces})."
         ));
     }
+    lineas
+}
+
+/// ¿El título del redactor nombra las limitaciones? Se compara sin tildes ni
+/// mayúsculas: «Limitaciones» o «Limitaciones del informe».
+fn es_limitaciones(titulo: &str) -> bool {
+    let t = titulo.trim().to_lowercase().replace('ó', "o");
+    t.starts_with("limitacion")
+}
+
+/// Las líneas como viñetas. Vacío si no hay ninguna: un título sin contenido
+/// declara menos que nada.
+fn vinetas(lineas: &[String]) -> String {
     if lineas.is_empty() {
         return String::new();
     }
-    let mut out = String::from("## Limitaciones\n\n");
+    let mut out = String::new();
     for l in lineas {
         out.push_str(&format!("- {l}\n"));
     }
@@ -547,5 +574,43 @@ mod tests {
             citas_sin_referencia(&md).is_empty(),
             "el texto del investigador no puede contarse como cita"
         );
+    }
+
+    #[test]
+    fn la_seccion_de_limitaciones_del_redactor_recibe_la_lista_automatica() {
+        // El redactor escribe las limitaciones de interpretación y el código
+        // agrega las suyas ahí mismo: dos títulos iguales serían el mismo
+        // capítulo partido en dos.
+        let mut a = artefacto();
+        a["report"]["sections"].as_array_mut().unwrap().push(json!({
+            "title": "Limitaciones",
+            "text": "La prensa gremial sobrerrepresenta a la dirigencia.",
+            "claim_ids": [],
+            "quotes": []
+        }));
+        let md = render(&a);
+        assert_eq!(md.matches("## Limitaciones").count(), 1, "{md}");
+        let seccion = md.find("## Limitaciones").unwrap();
+        assert!(
+            md[seccion..].contains("sobrerrepresenta a la dirigencia"),
+            "{md}"
+        );
+        assert!(md[seccion..].contains("- 1967 sin cobertura"), "{md}");
+    }
+
+    #[test]
+    fn sin_datos_automaticos_queda_solo_la_prosa_del_redactor() {
+        let mut a = artefacto();
+        a["archive_limitations"] = json!([]);
+        a["report"]["sections"].as_array_mut().unwrap().push(json!({
+            "title": "Limitaciones del informe",
+            "text": "Faltan las actas de 1967.",
+            "claim_ids": [],
+            "quotes": []
+        }));
+        let md = render(&a);
+        assert_eq!(md.matches("## Limitaciones").count(), 1, "{md}");
+        assert!(md.contains("Faltan las actas de 1967."), "{md}");
+        assert!(!md.contains("- 1967 sin cobertura"), "{md}");
     }
 }
