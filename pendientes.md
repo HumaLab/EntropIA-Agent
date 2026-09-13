@@ -15,6 +15,7 @@ trabajo de Fase 7 sin commitear.
 | 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | Abierto (ya no depende de nada) |
 | 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | Abierto |
 | 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | **Resuelto**: palabras vacías y repetidos fuera antes del tope (léxica 0.48 → 0.68, híbrida 0.82 → 0.89) |
+| 8 | La fusión RRF desempata al azar | Defecto | Chico | **Resuelto**: orden total (puntaje, mejor puesto de pierna, id) y chunks cargados por id |
 
 **Estado al 2026-09-11 (tarde).**
 - #1 y #2 están en `main` de los dos repos y publicados; el pin del motor en Pro-Lite apunta a
@@ -328,3 +329,26 @@ del workflow y la línea base del bench.
 **Cómo se verifica.** Un test de `fts5_query` con una pregunta cuyo término clave está
 después de la palabra 12. La corrida del bench antes y después, comparando la línea base
 léxica y el recall híbrido.
+
+---
+
+## 8. La fusión RRF desempata al azar
+
+**Problema.** La recuperación híbrida no es determinista: la misma pregunta puede mandar
+candidatos distintos al rerank en dos corridas. Para un motor que congela snapshots y
+promete investigaciones reproducibles, es un defecto; también ensucia cualquier medición
+del bench.
+
+**Evidencia.**
+- `rrf_fuse` (`src/recuperacion.rs:508-518`) acumula puntajes en un `HashMap` y ordena
+  solo por puntaje. Los empates quedan en el orden de iteración del `HashMap`, que Rust
+  aleatoriza por instancia.
+- Los empates son frecuentes: un fragmento que solo trae la pierna vectorial en el puesto
+  *r* suma exactamente lo mismo que uno que solo trae la léxica en el mismo puesto.
+- Detectado al construir el diagnóstico de profundidad (`07054df`).
+
+**Propuesta.** Orden total: puntaje descendente, luego el mejor puesto en alguna pierna,
+luego el id del fragmento.
+
+**Cómo se verifica.** Un test que llama la fusión muchas veces con empates exactos y exige
+siempre el mismo orden esperado (falla con el código actual).

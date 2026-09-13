@@ -120,7 +120,9 @@ impl RepositorioSqlite {
     }
 
     /// Carga los chunks con su embedding y metadatos, excluyendo las
-    /// colecciones de la denylist.
+    /// colecciones de la denylist, **ordenados por id**: la posición de carga
+    /// desempata la fusión RRF, y sin orden explícito dependería del plan de
+    /// SQLite.
     pub fn cargar_chunks(&self) -> Result<Vec<ChunkRag>, String> {
         let (clausula, nombres) = self.clausula_no_excluidas();
         let sql = format!(
@@ -131,7 +133,8 @@ SELECT rc.id, rc.text_content, rc.embedding, i.title, COALESCE(c.name, ''), \
 FROM rag_chunks rc \
 LEFT JOIN items i ON i.id = rc.item_id \
 LEFT JOIN collections c ON c.id = i.collection_id \
-WHERE {clausula}"
+WHERE {clausula} \
+ORDER BY rc.id"
         );
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
         let parametros: Vec<&dyn ToSql> = nombres.iter().map(|n| n as &dyn ToSql).collect();
@@ -451,6 +454,33 @@ fn es_token_valido(t: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargar_chunks_los_entrega_ordenados_por_id() {
+        // La posición de carga es el índice que desempata la fusión RRF: tiene
+        // que ser el orden por id, no el de inserción. chunk-0 entra último.
+        let path = crate::tests_comunes::corpus_sintetico();
+        Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO rag_chunks (id, asset_id, item_id, source_kind, source_id, \
+                 chunk_ordinal, text_content, start_char, end_char, source_text_hash, \
+                 chunking_contract, embedding, embedding_model, embedding_contract, dimensions) \
+                 VALUES ('chunk-0', 'chunk-0', 'item-1', 'transcription', 'src', 2, \
+                         'agregado al final', 0, 10, 'hash', 'test', \
+                         X'0000803F00000000', 'bge-m3', 'test', 1024)",
+                [],
+            )
+            .unwrap();
+        let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+        let ids: Vec<String> = repo
+            .cargar_chunks()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, ["chunk-0", "chunk-1", "chunk-2", "chunk-3"]);
+    }
 
     #[test]
     fn fts5_minusculea_y_une_con_or() {

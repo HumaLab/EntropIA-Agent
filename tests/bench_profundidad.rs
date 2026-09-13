@@ -12,23 +12,24 @@
 //! toda pregunta con evidencia esperada.
 //!
 //! Cómo leer los `k` (con `LEG_K` = 24 por pierna y `RERANK_DEPTH` = 16):
-//! - Las posiciones por pierna (`v`, `l`) son exactas: hasta 24 están dentro
-//!   de lo que el flujo trae; más allá simulan subir `LEG_K`.
-//! - Las piernas se miden a la mayor profundidad pedida (48), más hondas que
-//!   las del flujo, así que la fusión (`f`, `recall@k`) no es la del flujo aun
-//!   en sus primeras posiciones: un chunk hondo en las dos piernas puede sumar
-//!   más que uno alto en una sola. Simula subir `LEG_K` a 48.
-//! - Más allá de 48 la fusión de dos piernas de 24 no tiene sentido.
-//! - Los empates de RRF (un chunk solo en una pierna, a la misma posición que
-//!   otro solo en la otra) se ordenan al azar, en el flujo y acá: una posición
-//!   de la fusión puede variar entre corridas.
+//! - Las posiciones por pierna (`v`, `l`) son exactas hasta 48: hasta 24 están
+//!   dentro de lo que el flujo trae; más allá simulan subir `LEG_K`.
+//! - `f` y la curva principal (`recall_fusion`) salen de la fusión del flujo:
+//!   piernas de 24, el pool de candidatos real (a lo sumo 48). Sus primeros 16
+//!   son los que van al rerank.
+//! - La curva secundaria (`recall_fusion_leg_k_simulado`) fusiona las piernas
+//!   medidas a 48: simula subir `LEG_K` a 48. No es la del flujo aun en sus
+//!   primeras posiciones: un chunk hondo en las dos piernas puede sumar más que
+//!   uno alto en una sola.
+//! - Los empates de RRF se desempatan por la mejor posición en alguna pierna y
+//!   después por id: dos corridas dan el mismo orden.
 //!
 //! Escribe `bench/resultados/<AAAA-MM-DD>-profundidad.json`. Es `#[ignore]`:
 //! `BENCH_IDS=soip-001,soip-002 cargo test --test bench_profundidad -- --ignored --nocapture`.
 
 use entropia_agent::bench::{
     alcance_seleccionar_todo, cargar_banco, diagnosticar_profundidad, resumir_profundidad,
-    Agregado, DiagnosticoProfundidad, PreguntaBench,
+    Agregado, DiagnosticoProfundidad, PreguntaBench, RecallMedioEnK,
 };
 use entropia_agent::embeddings::ClienteEmbeddings;
 use entropia_agent::recuperacion::{Recuperador, LEG_K, RERANK_DEPTH};
@@ -169,9 +170,9 @@ fn diagnostica_la_profundidad_de_la_recuperacion_real() {
         "rerank_depth": RERANK_DEPTH,
         "nota": format!(
             "posiciones por pierna exactas: hasta LEG_K={LEG_K} están dentro del flujo. \
-             Las piernas se midieron a {profundidad}, así que la fusión simula subir LEG_K \
-             y no es la del flujo aun en sus primeras posiciones. Sin rerank. Los empates \
-             de RRF se ordenan al azar."
+             f y recall_fusion salen de la fusión del flujo (piernas de LEG_K, el pool \
+             real); recall_fusion_leg_k_simulado fusiona piernas de {profundidad} y simula \
+             subir LEG_K. Sin rerank."
         ),
         "alcance": alcance_seleccionar_todo(&repo),
         "diagnosticos": diagnosticos,
@@ -192,13 +193,20 @@ fn diagnostica_la_profundidad_de_la_recuperacion_real() {
     for d in &diagnosticos {
         println!("{}", linea(d));
     }
-    let curva: Vec<String> = resumen
-        .iter()
-        .map(|r| format!("@{}={}", r.k, formatear(&r.recall)))
-        .collect();
+    let curva = |puntos: &[RecallMedioEnK]| -> String {
+        puntos
+            .iter()
+            .map(|r| format!("@{}={}", r.k, formatear(&r.recall)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     println!(
-        "recall_fusion medio: {} → {}",
-        curva.join(" "),
-        salida.display()
+        "recall_fusion medio (flujo, LEG_K={LEG_K}): {}",
+        curva(&resumen.recall_fusion)
     );
+    println!(
+        "recall_fusion medio (LEG_K simulado en {profundidad}): {}",
+        curva(&resumen.recall_fusion_leg_k_simulado)
+    );
+    println!("→ {}", salida.display());
 }

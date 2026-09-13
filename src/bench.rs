@@ -285,7 +285,11 @@ pub struct PosicionGrupo {
     pub chunks: Vec<String>,
     pub vectorial: Option<usize>,
     pub lexica: Option<usize>,
+    /// En la fusión del flujo (piernas de `LEG_K`, a lo sumo 2·`LEG_K`).
     pub fusion: Option<usize>,
+    /// En la fusión de piernas medidas a la profundidad del diagnóstico:
+    /// simula subir `LEG_K` a esa profundidad.
+    pub fusion_leg_k_simulado: Option<usize>,
 }
 
 /// Recall de grupos de evidencia sobre los primeros `k` de la fusión. `None`
@@ -304,8 +308,11 @@ pub struct DiagnosticoProfundidad {
     /// Profundidad medida: el mayor `k` pedido.
     pub profundidad: usize,
     pub grupos: Vec<PosicionGrupo>,
-    /// Curva de recall de la fusión, un punto por cada `k` pedido.
+    /// Curva de recall de la fusión del flujo, un punto por cada `k` pedido:
+    /// la que mide el pool de candidatos real.
     pub recall_fusion: Vec<RecallEnK>,
+    /// Curva de recall de la fusión que simula subir `LEG_K` a `profundidad`.
+    pub recall_fusion_leg_k_simulado: Vec<RecallEnK>,
     /// `None` cuando corrieron las dos piernas (ver `RankingDiagnostico`).
     pub degradacion: Option<String>,
 }
@@ -328,6 +335,10 @@ pub fn diagnosticar_profundidad(
             profundidad,
             grupos: Vec::new(),
             recall_fusion: ks.iter().map(|&k| RecallEnK { k, recall: None }).collect(),
+            recall_fusion_leg_k_simulado: ks
+                .iter()
+                .map(|&k| RecallEnK { k, recall: None })
+                .collect(),
             degradacion: None,
         };
     }
@@ -345,21 +356,24 @@ pub fn diagnosticar_profundidad(
             chunks: chunks.clone(),
             vectorial: posicion(&ranking.vectorial, chunks),
             lexica: posicion(&ranking.lexica, chunks),
-            fusion: posicion(&ranking.fusion, chunks),
+            fusion: posicion(&ranking.fusion_flujo, chunks),
+            fusion_leg_k_simulado: posicion(&ranking.fusion, chunks),
         })
         .collect();
-    let recall_fusion = ks
-        .iter()
-        .map(|&k| RecallEnK {
-            k,
-            recall: recall(&evidencia, &ranking.fusion[..k.min(ranking.fusion.len())]),
-        })
-        .collect();
+    let curva = |fusion: &[String]| -> Vec<RecallEnK> {
+        ks.iter()
+            .map(|&k| RecallEnK {
+                k,
+                recall: recall(&evidencia, &fusion[..k.min(fusion.len())]),
+            })
+            .collect()
+    };
     DiagnosticoProfundidad {
         pregunta_id: pregunta.id.clone(),
         profundidad,
         grupos,
-        recall_fusion,
+        recall_fusion: curva(&ranking.fusion_flujo),
+        recall_fusion_leg_k_simulado: curva(&ranking.fusion),
         degradacion: ranking.degradacion,
     }
 }
@@ -372,34 +386,44 @@ pub struct RecallMedioEnK {
     pub recall: Agregado,
 }
 
-/// Curva media de recall de la fusión: para cada `k`, el promedio sobre las
+/// Curvas medias de recall de la fusión, promediadas en cada `k` sobre las
 /// preguntas que declaran evidencia (las demás no entran al promedio).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResumenProfundidad {
+    /// Sobre la fusión del flujo (piernas de `LEG_K`): la curva principal.
+    pub recall_fusion: Vec<RecallMedioEnK>,
+    /// Sobre la fusión que simula subir `LEG_K` a la profundidad medida.
+    pub recall_fusion_leg_k_simulado: Vec<RecallMedioEnK>,
+}
+
+/// Resume los diagnósticos en sus dos curvas medias.
 pub fn resumir_profundidad(
     diagnosticos: &[DiagnosticoProfundidad],
     ks: &[usize],
-) -> Vec<RecallMedioEnK> {
-    ks.iter()
-        .map(|&k| {
-            let valores: Vec<f64> = diagnosticos
-                .iter()
-                .filter_map(|d| {
-                    d.recall_fusion
-                        .iter()
-                        .find(|r| r.k == k)
-                        .and_then(|r| r.recall)
-                })
-                .collect();
-            RecallMedioEnK {
-                k,
-                recall: Agregado {
-                    media: (!valores.is_empty())
-                        .then(|| valores.iter().sum::<f64>() / valores.len() as f64),
-                    aplicables: valores.len(),
-                    total: diagnosticos.len(),
-                },
-            }
-        })
-        .collect()
+) -> ResumenProfundidad {
+    let media = |curva: fn(&DiagnosticoProfundidad) -> &[RecallEnK]| -> Vec<RecallMedioEnK> {
+        ks.iter()
+            .map(|&k| {
+                let valores: Vec<f64> = diagnosticos
+                    .iter()
+                    .filter_map(|d| curva(d).iter().find(|r| r.k == k).and_then(|r| r.recall))
+                    .collect();
+                RecallMedioEnK {
+                    k,
+                    recall: Agregado {
+                        media: (!valores.is_empty())
+                            .then(|| valores.iter().sum::<f64>() / valores.len() as f64),
+                        aplicables: valores.len(),
+                        total: diagnosticos.len(),
+                    },
+                }
+            })
+            .collect()
+    };
+    ResumenProfundidad {
+        recall_fusion: media(|d| d.recall_fusion.as_slice()),
+        recall_fusion_leg_k_simulado: media(|d| d.recall_fusion_leg_k_simulado.as_slice()),
+    }
 }
 
 /// ¿El item tiene al menos un chunk en el corpus (recorte real)?
@@ -583,7 +607,9 @@ mod tests {
             vec!["chunk-2".into()],
         ];
         // A profundidad 2: vectorial [chunk-1, chunk-2] (empate de coseno,
-        // orden de carga), léxica [chunk-3, chunk-1] y fusión
+        // orden de carga) y léxica [chunk-3, chunk-1]. La fusión del flujo usa
+        // piernas de LEG_K: [chunk-1, chunk-3, chunk-2]. La que simula
+        // LEG_K = 2 fusiona las piernas de 2 y se corta en 2:
         // [chunk-1 (1/61 + 1/62), chunk-3 (1/61)]; chunk-2 (1/62) queda fuera.
         let d = diagnosticar_profundidad(&r, &rec, &p, &[1, 2]);
         assert_eq!(d.pregunta_id, "test-1");
@@ -596,12 +622,14 @@ mod tests {
                     vectorial: Some(1),
                     lexica: Some(1),
                     fusion: Some(1),
+                    fusion_leg_k_simulado: Some(1),
                 },
                 PosicionGrupo {
                     chunks: vec!["chunk-2".into()],
                     vectorial: Some(2),
                     lexica: None,
-                    fusion: None,
+                    fusion: Some(3),
+                    fusion_leg_k_simulado: None,
                 },
             ]
         );
@@ -635,6 +663,9 @@ mod tests {
                 },
             ]
         );
+        // Las piernas del corpus sintético caben enteras a profundidad 3: la
+        // fusión que simula LEG_K = 3 coincide con la del flujo.
+        assert_eq!(d.recall_fusion_leg_k_simulado, d.recall_fusion);
     }
 
     /// Embedder de prueba que no se debe llamar: la llamada sería paga.
@@ -687,46 +718,54 @@ mod tests {
         assert!(motivo.contains("sin pierna semántica"), "{motivo}");
     }
 
-    fn diagnostico(id: &str, curva: &[(usize, Option<f64>)]) -> DiagnosticoProfundidad {
+    type Curva<'a> = &'a [(usize, Option<f64>)];
+
+    fn diagnostico(id: &str, flujo: Curva, simulada: Curva) -> DiagnosticoProfundidad {
+        let puntos = |curva: Curva| {
+            curva
+                .iter()
+                .map(|&(k, recall)| RecallEnK { k, recall })
+                .collect()
+        };
         DiagnosticoProfundidad {
             pregunta_id: id.into(),
             profundidad: 16,
             grupos: vec![],
-            recall_fusion: curva
-                .iter()
-                .map(|&(k, recall)| RecallEnK { k, recall })
-                .collect(),
+            recall_fusion: puntos(flujo),
+            recall_fusion_leg_k_simulado: puntos(simulada),
             degradacion: None,
         }
     }
 
     #[test]
-    fn la_curva_media_promedia_cada_k_solo_sobre_las_preguntas_con_evidencia() {
+    fn las_dos_curvas_medias_promedian_cada_k_solo_sobre_las_preguntas_con_evidencia() {
+        let sin_evidencia = [(8, None), (16, None)];
         let diagnosticos = [
-            diagnostico("a", &[(8, Some(0.5)), (16, Some(1.0))]),
-            diagnostico("b", &[(8, Some(0.0)), (16, Some(1.0))]),
-            diagnostico("sin-evidencia", &[(8, None), (16, None)]),
+            diagnostico(
+                "a",
+                &[(8, Some(0.5)), (16, Some(1.0))],
+                &[(8, Some(1.0)), (16, Some(1.0))],
+            ),
+            diagnostico(
+                "b",
+                &[(8, Some(0.0)), (16, Some(1.0))],
+                &[(8, Some(0.5)), (16, Some(1.0))],
+            ),
+            diagnostico("sin-evidencia", &sin_evidencia, &sin_evidencia),
         ];
+        let medio = |k: usize, media: f64| RecallMedioEnK {
+            k,
+            recall: Agregado {
+                media: Some(media),
+                aplicables: 2,
+                total: 3,
+            },
+        };
+        let resumen = resumir_profundidad(&diagnosticos, &[8, 16]);
+        assert_eq!(resumen.recall_fusion, vec![medio(8, 0.25), medio(16, 1.0)]);
         assert_eq!(
-            resumir_profundidad(&diagnosticos, &[8, 16]),
-            vec![
-                RecallMedioEnK {
-                    k: 8,
-                    recall: Agregado {
-                        media: Some(0.25),
-                        aplicables: 2,
-                        total: 3
-                    }
-                },
-                RecallMedioEnK {
-                    k: 16,
-                    recall: Agregado {
-                        media: Some(1.0),
-                        aplicables: 2,
-                        total: 3
-                    }
-                },
-            ]
+            resumen.recall_fusion_leg_k_simulado,
+            vec![medio(8, 0.75), medio(16, 1.0)]
         );
     }
 

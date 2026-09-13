@@ -171,6 +171,10 @@ pub struct RankingDiagnostico {
     pub vectorial: Vec<String>,
     pub lexica: Vec<String>,
     pub fusion: Vec<String>,
+    /// Fusión tal como la arma el flujo: piernas cortadas en `LEG_K`, sin
+    /// truncar (a lo sumo 2·`LEG_K`), sea cual sea `profundidad`. Sus primeros
+    /// `RERANK_DEPTH` son los candidatos que el flujo manda al rerank.
+    pub fusion_flujo: Vec<String>,
     /// Llamadas externas que hizo el diagnóstico.
     pub llamadas: LlamadasRecuperacion,
     /// `None` cuando corrieron las dos piernas: un ranking solo léxico tiene
@@ -339,13 +343,13 @@ impl Recuperador {
     /// Hace una llamada de embeddings y ninguna de rerank: el rerank solo
     /// reordena el top de la fusión y no puede rescatar lo que no llegó.
     ///
-    /// Cada pierna y la fusión se cortan en `profundidad`. Con
-    /// `profundidad = LEG_K` las piernas coinciden con las del flujo y los
-    /// primeros `RERANK_DEPTH` de la fusión son exactamente los candidatos que
-    /// `recuperar_en_colecciones` manda al rerank. Con `profundidad > LEG_K`
-    /// las piernas simulan además subir `LEG_K`, y la fusión deja de ser la del
-    /// flujo aun en sus primeras posiciones: un chunk hondo en las dos piernas
-    /// puede sumar más que uno alto en una sola.
+    /// `vectorial`, `lexica` y `fusion` se cortan en `profundidad`. Con
+    /// `profundidad > LEG_K` las piernas simulan subir `LEG_K`, y `fusion` deja
+    /// de ser la del flujo aun en sus primeras posiciones: un chunk hondo en las
+    /// dos piernas puede sumar más que uno alto en una sola. `fusion_flujo` es
+    /// siempre la del flujo (piernas de `LEG_K`), sacada de las mismas piernas:
+    /// sus primeros `RERANK_DEPTH` son exactamente los candidatos que
+    /// `recuperar_en_colecciones` manda al rerank.
     pub fn ranking_diagnostico(
         &self,
         repo: &RepositorioSqlite,
@@ -371,9 +375,12 @@ impl Recuperador {
             .filter(|(_, c)| colecciones.is_empty() || colecciones.contains(&c.collection_id))
             .map(|(i, _)| i)
             .collect();
+        // Las piernas se miden al menos a LEG_K: la fusión del flujo las
+        // necesita enteras aunque se pida una profundidad menor.
+        let medida = profundidad.max(LEG_K);
         let mut degradacion = None;
-        let vectorial = match self.embeddings.embed(consulta) {
-            Ok(q) => knn_en_hasta(&chunks, &permitidos, &q, profundidad),
+        let vectorial_medida = match self.embeddings.embed(consulta) {
+            Ok(q) => knn_en_hasta(&chunks, &permitidos, &q, medida),
             Err(e) => {
                 degradacion = Some(format!(
                     "diagnóstico sin pierna semántica ({e}): solo búsqueda léxica"
@@ -381,26 +388,36 @@ impl Recuperador {
                 Vec::new()
             }
         };
-        // Mismo pedido ancho que el flujo: con `profundidad <= LEG_K` es
-        // idéntico al de `recuperar_en_colecciones`.
+        // Pedido ancho como el del flujo. Sus primeros `LEG_K * 8` crudos son
+        // exactamente los que `recuperar_en_colecciones` filtra y corta en
+        // `LEG_K`: de ahí sale la pierna léxica del flujo.
         let en_recorte: std::collections::HashSet<usize> = permitidos.iter().copied().collect();
-        let lexical: Vec<usize> = repo
-            .buscar_fts5(consulta, profundidad.max(LEG_K) * 8)
-            .iter()
-            .filter_map(|id| indice.get(id).copied())
-            .filter(|i| en_recorte.contains(i))
-            .take(profundidad)
-            .collect();
-        let fusion: Vec<usize> = rrf_fuse(&vectorial, &lexical)
+        let crudos = repo.buscar_fts5(consulta, medida * 8);
+        let lexica_hasta = |crudos: &[String], k: usize| -> Vec<usize> {
+            crudos
+                .iter()
+                .filter_map(|id| indice.get(id).copied())
+                .filter(|i| en_recorte.contains(i))
+                .take(k)
+                .collect()
+        };
+        let lexical_medida = lexica_hasta(&crudos, medida);
+        let lexical_flujo = lexica_hasta(&crudos[..crudos.len().min(LEG_K * 8)], LEG_K);
+        let fusion_flujo = fusion_del_flujo(&vectorial_medida, &lexical_flujo);
+
+        let vectorial = &vectorial_medida[..vectorial_medida.len().min(profundidad)];
+        let lexical = &lexical_medida[..lexical_medida.len().min(profundidad)];
+        let fusion: Vec<usize> = rrf_fuse(vectorial, lexical)
             .into_iter()
             .take(profundidad)
             .map(|(i, _)| i)
             .collect();
         let ids = |orden: &[usize]| orden.iter().map(|&i| chunks[i].id.clone()).collect();
         RankingDiagnostico {
-            vectorial: ids(&vectorial),
-            lexica: ids(&lexical),
+            vectorial: ids(vectorial),
+            lexica: ids(lexical),
             fusion: ids(&fusion),
+            fusion_flujo: ids(&fusion_flujo),
             llamadas: LlamadasRecuperacion {
                 embeddings: 1,
                 rerank: 0,
@@ -505,17 +522,46 @@ fn knn(chunks: &[ChunkRag], q_emb: &[f32]) -> Vec<usize> {
 }
 
 /// Fusión por Reciprocal Rank Fusion de dos listas de índices rankeadas.
+///
+/// El orden es total: puntaje descendente, después la mejor posición del chunk
+/// en alguna pierna y por último el índice, que sigue el orden por id con que
+/// `cargar_chunks` entrega el corpus. El orden de un HashMap cambia en cada
+/// instancia, y un empate —frecuente: un chunk solo en una pierna empata con
+/// otro solo en la otra a la misma posición— mandaría candidatos distintos al
+/// rerank en cada corrida.
 fn rrf_fuse(vectorial: &[usize], lexical: &[usize]) -> Vec<(usize, f64)> {
-    let mut scores: HashMap<usize, f64> = HashMap::new();
-    for (rank, &idx) in vectorial.iter().enumerate() {
-        *scores.entry(idx).or_insert(0.0) += 1.0 / (RRF_K as f64 + rank as f64 + 1.0);
+    // Por chunk: puntaje acumulado y mejor posición en alguna pierna.
+    let mut scores: HashMap<usize, (f64, usize)> = HashMap::new();
+    for pierna in [vectorial, lexical] {
+        for (rank, &idx) in pierna.iter().enumerate() {
+            let entrada = scores.entry(idx).or_insert((0.0, rank));
+            entrada.0 += 1.0 / (RRF_K as f64 + rank as f64 + 1.0);
+            entrada.1 = entrada.1.min(rank);
+        }
     }
-    for (rank, &idx) in lexical.iter().enumerate() {
-        *scores.entry(idx).or_insert(0.0) += 1.0 / (RRF_K as f64 + rank as f64 + 1.0);
-    }
-    let mut v: Vec<(usize, f64)> = scores.into_iter().collect();
-    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    v
+    let mut v: Vec<(usize, f64, usize)> = scores
+        .into_iter()
+        .map(|(idx, (puntaje, mejor))| (idx, puntaje, mejor))
+        .collect();
+    v.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    v.into_iter()
+        .map(|(idx, puntaje, _)| (idx, puntaje))
+        .collect()
+}
+
+/// Fusión tal como la arma el flujo: solo las primeras `LEG_K` de cada pierna,
+/// sin truncar (a lo sumo 2·`LEG_K`). Las piernas pueden venir más hondas.
+fn fusion_del_flujo(vectorial: &[usize], lexical: &[usize]) -> Vec<usize> {
+    let corte = |pierna: &[usize]| pierna.len().min(LEG_K);
+    rrf_fuse(&vectorial[..corte(vectorial)], &lexical[..corte(lexical)])
+        .into_iter()
+        .map(|(i, _)| i)
+        .collect()
 }
 
 fn snippet(texto: &str, max: usize) -> String {
@@ -540,6 +586,81 @@ mod tests {
         let por_idx: HashMap<usize, f64> = fusion.iter().cloned().collect();
         assert!(por_idx[&1] > por_idx[&0]);
         assert!(por_idx[&1] > por_idx[&2]);
+    }
+
+    #[test]
+    fn los_empates_de_rrf_salen_siempre_en_el_mismo_orden() {
+        // 0 y 2 empatan en 1/61 (primeros en una sola pierna); 1 y 3 en 1/62.
+        // Con igual puntaje e igual mejor posición decide el índice, que sigue
+        // el orden por id del corpus. Un orden que depende de la iteración de
+        // un HashMap manda candidatos distintos al rerank en cada corrida.
+        for _ in 0..64 {
+            let orden: Vec<usize> = rrf_fuse(&[0, 1], &[2, 3])
+                .into_iter()
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(orden, [0, 2, 1, 3]);
+        }
+    }
+
+    #[test]
+    fn en_un_empate_de_rrf_gana_la_mejor_posicion_en_alguna_pierna() {
+        // A queda 3.º en la vectorial y 24.º en la léxica; B, 12.º en las dos.
+        // Los puntajes empatan exactamente: decide la mejor posición de cada
+        // uno, no el índice (B tiene el menor).
+        let (a, b) = (100, 1);
+        let mut vectorial: Vec<usize> = (200..224).collect();
+        vectorial[2] = a;
+        vectorial[11] = b;
+        let mut lexica: Vec<usize> = (300..324).collect();
+        lexica[11] = b;
+        lexica[23] = a;
+        let fusion = rrf_fuse(&vectorial, &lexica);
+        let puntaje = |i: usize| fusion.iter().find(|(j, _)| *j == i).unwrap().1;
+        assert_eq!(puntaje(a), puntaje(b), "el ejemplo tiene que empatar");
+        let posicion = |i: usize| fusion.iter().position(|(j, _)| *j == i).unwrap();
+        assert!(posicion(a) < posicion(b), "{fusion:?}");
+    }
+
+    #[test]
+    fn la_fusion_del_flujo_solo_ve_las_primeras_leg_k_de_cada_pierna() {
+        // Piernas de 30: X (índice 7) queda 27.º en las dos, fuera de LEG_K.
+        let x = 7;
+        let mut vectorial: Vec<usize> = (200..230).collect();
+        vectorial[26] = x;
+        let mut lexica: Vec<usize> = (300..330).collect();
+        lexica[26] = x;
+        // Fusionando las piernas enteras, X suma 2/87 y le gana a cualquier
+        // chunk que esté primero en una sola pierna (1/61).
+        assert_eq!(rrf_fuse(&vectorial, &lexica)[0].0, x);
+
+        let flujo = fusion_del_flujo(&vectorial, &lexica);
+        // El flujo solo trae LEG_K por pierna: X no llega, y la fusión son
+        // los 2·LEG_K candidatos distintos, encabezados por los dos primeros
+        // de cada pierna (empate de 1/61, desempata el índice).
+        assert!(!flujo.contains(&x));
+        assert_eq!(flujo.len(), 2 * LEG_K);
+        assert_eq!(flujo[..2], [200, 300]);
+    }
+
+    #[test]
+    fn a_cualquier_profundidad_la_fusion_del_flujo_es_la_que_va_al_rerank() {
+        let repo = repo_completo();
+        let r = recuperador(false, false);
+        let recorte = ["c-conflicto".to_string()];
+        let flujo: Vec<String> = r
+            .recuperar_en_colecciones(&repo, "huelga segundo", &recorte, RERANK_DEPTH)
+            .fragmentos
+            .into_iter()
+            .map(|f| f.chunk_id)
+            .collect();
+        assert_eq!(flujo, ["chunk-1", "chunk-3", "chunk-2"]);
+        // Con piernas más cortas que LEG_K o más hondas, la fusión del flujo
+        // se arma con LEG_K por pierna, como en producción.
+        for profundidad in [2, 2 * LEG_K] {
+            let d = r.ranking_diagnostico(&repo, "huelga segundo", &recorte, profundidad);
+            assert_eq!(d.fusion_flujo, flujo, "profundidad {profundidad}");
+        }
     }
 
     #[test]
