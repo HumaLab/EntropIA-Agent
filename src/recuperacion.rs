@@ -19,7 +19,7 @@ use crate::rerank::ClienteRerank;
 use crate::vector;
 
 /// Candidatos por pierna de recuperación.
-const LEG_K: usize = 24;
+pub const LEG_K: usize = 24;
 /// Candidatos que entran al rerank. Es también el techo del `retrieval_limit`
 /// de un plan: la recuperación no entrega más fragmentos por consulta.
 pub const RERANK_DEPTH: usize = 16;
@@ -162,6 +162,20 @@ impl Recuperacion {
             llamadas: LlamadasRecuperacion::default(),
         }
     }
+}
+
+/// Rankings de una consulta por pierna y de su fusión, en ids de chunk y en
+/// orden de posición (ver `Recuperador::ranking_diagnostico`).
+#[derive(Debug, Default)]
+pub struct RankingDiagnostico {
+    pub vectorial: Vec<String>,
+    pub lexica: Vec<String>,
+    pub fusion: Vec<String>,
+    /// Llamadas externas que hizo el diagnóstico.
+    pub llamadas: LlamadasRecuperacion,
+    /// `None` cuando corrieron las dos piernas: un ranking solo léxico tiene
+    /// que declararlo.
+    pub degradacion: Option<String>,
 }
 
 /// Orquestador de recuperación híbrida.
@@ -318,6 +332,83 @@ impl Recuperador {
         }
     }
 
+    /// Rankings de las dos piernas y de la fusión RRF, **sin rerank**, para
+    /// diagnosticar en qué posición aparece la evidencia (calibración de
+    /// `RERANK_DEPTH`). Solo lectura: no toca el flujo de producción.
+    ///
+    /// Hace una llamada de embeddings y ninguna de rerank: el rerank solo
+    /// reordena el top de la fusión y no puede rescatar lo que no llegó.
+    ///
+    /// Cada pierna y la fusión se cortan en `profundidad`. Con
+    /// `profundidad = LEG_K` las piernas coinciden con las del flujo y los
+    /// primeros `RERANK_DEPTH` de la fusión son exactamente los candidatos que
+    /// `recuperar_en_colecciones` manda al rerank. Con `profundidad > LEG_K`
+    /// las piernas simulan además subir `LEG_K`, y la fusión deja de ser la del
+    /// flujo aun en sus primeras posiciones: un chunk hondo en las dos piernas
+    /// puede sumar más que uno alto en una sola.
+    pub fn ranking_diagnostico(
+        &self,
+        repo: &RepositorioSqlite,
+        consulta: &str,
+        colecciones: &[String],
+        profundidad: usize,
+    ) -> RankingDiagnostico {
+        let (chunks, indice) = {
+            let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
+            match cache.obtener_o_cargar(repo, |r| r.cargar_chunks()) {
+                Ok(par) => par,
+                Err(e) => {
+                    return RankingDiagnostico {
+                        degradacion: Some(format!("no se pudo cargar el corpus: {e}")),
+                        ..RankingDiagnostico::default()
+                    }
+                }
+            }
+        };
+        let permitidos: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| colecciones.is_empty() || colecciones.contains(&c.collection_id))
+            .map(|(i, _)| i)
+            .collect();
+        let mut degradacion = None;
+        let vectorial = match self.embeddings.embed(consulta) {
+            Ok(q) => knn_en_hasta(&chunks, &permitidos, &q, profundidad),
+            Err(e) => {
+                degradacion = Some(format!(
+                    "diagnóstico sin pierna semántica ({e}): solo búsqueda léxica"
+                ));
+                Vec::new()
+            }
+        };
+        // Mismo pedido ancho que el flujo: con `profundidad <= LEG_K` es
+        // idéntico al de `recuperar_en_colecciones`.
+        let en_recorte: std::collections::HashSet<usize> = permitidos.iter().copied().collect();
+        let lexical: Vec<usize> = repo
+            .buscar_fts5(consulta, profundidad.max(LEG_K) * 8)
+            .iter()
+            .filter_map(|id| indice.get(id).copied())
+            .filter(|i| en_recorte.contains(i))
+            .take(profundidad)
+            .collect();
+        let fusion: Vec<usize> = rrf_fuse(&vectorial, &lexical)
+            .into_iter()
+            .take(profundidad)
+            .map(|(i, _)| i)
+            .collect();
+        let ids = |orden: &[usize]| orden.iter().map(|&i| chunks[i].id.clone()).collect();
+        RankingDiagnostico {
+            vectorial: ids(&vectorial),
+            lexica: ids(&lexical),
+            fusion: ids(&fusion),
+            llamadas: LlamadasRecuperacion {
+                embeddings: 1,
+                rerank: 0,
+            },
+            degradacion,
+        }
+    }
+
     /// Recupera los fragmentos más relevantes para una consulta del agente.
     ///
     /// El `limite` se acota a `RERANK_DEPTH` de forma explícita: es la
@@ -385,6 +476,11 @@ impl Recuperador {
 
 /// kNN por similitud coseno restringido a los índices habilitados.
 fn knn_en(chunks: &[ChunkRag], permitidos: &[usize], q_emb: &[f32]) -> Vec<usize> {
+    knn_en_hasta(chunks, permitidos, q_emb, LEG_K)
+}
+
+/// `knn_en` con profundidad explícita: los `k` habilitados más cercanos.
+fn knn_en_hasta(chunks: &[ChunkRag], permitidos: &[usize], q_emb: &[f32], k: usize) -> Vec<usize> {
     let mut sim: Vec<(usize, f32)> = permitidos
         .iter()
         .map(|&i| (i, vector::similitud_coseno(q_emb, &chunks[i].embedding)))
@@ -394,7 +490,7 @@ fn knn_en(chunks: &[ChunkRag], permitidos: &[usize], q_emb: &[f32]) -> Vec<usize
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.0.cmp(&b.0))
     });
-    sim.into_iter().take(LEG_K).map(|(i, _)| i).collect()
+    sim.into_iter().take(k).map(|(i, _)| i).collect()
 }
 
 /// kNN por similitud coseno: índices de los LEG_K chunks más cercanos.
@@ -652,6 +748,98 @@ mod tests {
         assert_eq!(f.coleccion, "Conflicto SOIP 1965-66");
         assert_eq!(f.asset_id, "chunk-1");
         assert_eq!((f.start, f.end), (0, 100));
+    }
+
+    #[test]
+    fn con_profundidad_leg_k_la_fusion_trae_lo_que_el_flujo_manda_al_rerank() {
+        let repo = repo_completo();
+        // `RerankIdentidad` conserva el orden: la salida del flujo es el top de
+        // la fusión que entró al rerank, truncado al límite.
+        let r = recuperador(false, false);
+        let recorte = ["c-conflicto".to_string()];
+        let flujo: Vec<String> = r
+            .recuperar_en_colecciones(&repo, "huelga segundo", &recorte, RERANK_DEPTH)
+            .fragmentos
+            .into_iter()
+            .map(|f| f.chunk_id)
+            .collect();
+        // chunk-1 suma en las dos piernas (1/61 + 1/62), chunk-3 también
+        // (1/63 + 1/61) y chunk-2 solo en la vectorial (1/62).
+        assert_eq!(flujo, ["chunk-1", "chunk-3", "chunk-2"]);
+
+        let d = r.ranking_diagnostico(&repo, "huelga segundo", &recorte, LEG_K);
+        let candidatos: Vec<String> = d.fusion.into_iter().take(RERANK_DEPTH).collect();
+        assert_eq!(candidatos, flujo);
+    }
+
+    /// Embedder de prueba que cuenta cuántas veces se lo llamó.
+    struct EmbedderContado {
+        llamadas: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl Embedder for EmbedderContado {
+        fn embed(&self, _: &str) -> Result<Vec<f32>, String> {
+            self.llamadas
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![1.0, 0.0])
+        }
+    }
+
+    /// Reranker de prueba que no se debe llamar nunca.
+    struct RerankProhibido;
+    impl Reranker for RerankProhibido {
+        fn rerank(&self, _: &str, _: &[String], _: usize) -> Result<Vec<(usize, f64)>, String> {
+            panic!("el diagnóstico no llama al rerank");
+        }
+    }
+
+    #[test]
+    fn el_diagnostico_ordena_y_trunca_piernas_y_fusion_dentro_del_recorte() {
+        let repo = repo_completo();
+        let embeddings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r = Recuperador::con_clientes(
+            Box::new(EmbedderContado {
+                llamadas: embeddings.clone(),
+            }),
+            Box::new(RerankProhibido),
+        );
+        let recorte = ["c-conflicto".to_string()];
+
+        let d = r.ranking_diagnostico(&repo, "huelga segundo", &recorte, 2);
+        // Los tres chunks del recorte empatan en coseno: la pierna vectorial
+        // los ordena por posición y se corta en 2.
+        assert_eq!(d.vectorial, ["chunk-1", "chunk-2"]);
+        // chunk-stress-1 también dice «huelga», pero vive fuera del recorte.
+        assert_eq!(d.lexica, ["chunk-3", "chunk-1"]);
+        // chunk-1 suma en las dos piernas; chunk-3 (1/61) le gana a chunk-2
+        // (1/62), que queda fuera de la fusión cortada en 2.
+        assert_eq!(d.fusion, ["chunk-1", "chunk-3"]);
+        assert_eq!(
+            d.llamadas,
+            LlamadasRecuperacion {
+                embeddings: 1,
+                rerank: 0
+            }
+        );
+        assert_eq!(embeddings.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let d = r.ranking_diagnostico(&repo, "huelga segundo", &recorte, 1);
+        assert_eq!(d.vectorial, ["chunk-1"]);
+        assert_eq!(d.lexica, ["chunk-3"]);
+        assert_eq!(d.fusion.len(), 1);
+    }
+
+    #[test]
+    fn sin_pierna_semantica_el_diagnostico_lo_declara() {
+        let repo = repo_completo();
+        let r = recuperador(true, false);
+        let d = r.ranking_diagnostico(&repo, "huelga segundo", &["c-conflicto".into()], 3);
+        // Un ranking solo léxico que no lo dice mide otra cosa en silencio.
+        assert!(d.vectorial.is_empty());
+        assert_eq!(d.lexica, ["chunk-3", "chunk-1"]);
+        let motivo = d.degradacion.expect("la degradación tiene que viajar");
+        assert!(motivo.contains("sin pierna semántica"), "{motivo}");
+        // El intento cuenta aunque falle: ver `LlamadasRecuperacion`.
+        assert_eq!(d.llamadas.embeddings, 1);
     }
 
     fn repo_fantasma() -> RepositorioSqlite {

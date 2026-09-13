@@ -277,6 +277,131 @@ pub fn correr_recuperacion(
     }
 }
 
+/// Mejor posición (desde 1) de un grupo de evidencia en cada ordenamiento del
+/// diagnóstico: la de cualquiera de sus chunks. `None` si ninguno aparece
+/// dentro de la profundidad medida.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PosicionGrupo {
+    pub chunks: Vec<String>,
+    pub vectorial: Option<usize>,
+    pub lexica: Option<usize>,
+    pub fusion: Option<usize>,
+}
+
+/// Recall de grupos de evidencia sobre los primeros `k` de la fusión. `None`
+/// si la pregunta no declara evidencia.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecallEnK {
+    pub k: usize,
+    pub recall: Option<f64>,
+}
+
+/// Diagnóstico de profundidad de una pregunta: en qué posición de cada pierna
+/// y de la fusión RRF aparece su evidencia, antes del rerank.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticoProfundidad {
+    pub pregunta_id: String,
+    /// Profundidad medida: el mayor `k` pedido.
+    pub profundidad: usize,
+    pub grupos: Vec<PosicionGrupo>,
+    /// Curva de recall de la fusión, un punto por cada `k` pedido.
+    pub recall_fusion: Vec<RecallEnK>,
+    /// `None` cuando corrieron las dos piernas (ver `RankingDiagnostico`).
+    pub degradacion: Option<String>,
+}
+
+/// Diagnostica a qué profundidad aparece la evidencia de una pregunta, en el
+/// mismo alcance que `evaluar` («seleccionar todo» menos la denylist).
+pub fn diagnosticar_profundidad(
+    repo: &crate::repositorio::RepositorioSqlite,
+    recuperador: &Recuperador,
+    pregunta: &PreguntaBench,
+    ks: &[usize],
+) -> DiagnosticoProfundidad {
+    let profundidad = ks.iter().copied().max().unwrap_or(0);
+    let evidencia = pregunta.grupos_evidencia();
+    if evidencia.is_empty() {
+        // Sin evidencia no hay posición ni recall que medir: no se paga una
+        // llamada de embeddings para una métrica que no aplica.
+        return DiagnosticoProfundidad {
+            pregunta_id: pregunta.id.clone(),
+            profundidad,
+            grupos: Vec::new(),
+            recall_fusion: ks.iter().map(|&k| RecallEnK { k, recall: None }).collect(),
+            degradacion: None,
+        };
+    }
+    let alcance = alcance_seleccionar_todo(repo);
+    let ranking = recuperador.ranking_diagnostico(repo, &pregunta.pregunta, &alcance, profundidad);
+    let posicion = |orden: &[String], grupo: &[String]| {
+        orden
+            .iter()
+            .position(|id| grupo.contains(id))
+            .map(|p| p + 1)
+    };
+    let grupos = evidencia
+        .iter()
+        .map(|chunks| PosicionGrupo {
+            chunks: chunks.clone(),
+            vectorial: posicion(&ranking.vectorial, chunks),
+            lexica: posicion(&ranking.lexica, chunks),
+            fusion: posicion(&ranking.fusion, chunks),
+        })
+        .collect();
+    let recall_fusion = ks
+        .iter()
+        .map(|&k| RecallEnK {
+            k,
+            recall: recall(&evidencia, &ranking.fusion[..k.min(ranking.fusion.len())]),
+        })
+        .collect();
+    DiagnosticoProfundidad {
+        pregunta_id: pregunta.id.clone(),
+        profundidad,
+        grupos,
+        recall_fusion,
+        degradacion: ranking.degradacion,
+    }
+}
+
+/// Punto de la curva media: recall de la fusión a `k`, promediado sobre las
+/// preguntas donde aplica.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecallMedioEnK {
+    pub k: usize,
+    pub recall: Agregado,
+}
+
+/// Curva media de recall de la fusión: para cada `k`, el promedio sobre las
+/// preguntas que declaran evidencia (las demás no entran al promedio).
+pub fn resumir_profundidad(
+    diagnosticos: &[DiagnosticoProfundidad],
+    ks: &[usize],
+) -> Vec<RecallMedioEnK> {
+    ks.iter()
+        .map(|&k| {
+            let valores: Vec<f64> = diagnosticos
+                .iter()
+                .filter_map(|d| {
+                    d.recall_fusion
+                        .iter()
+                        .find(|r| r.k == k)
+                        .and_then(|r| r.recall)
+                })
+                .collect();
+            RecallMedioEnK {
+                k,
+                recall: Agregado {
+                    media: (!valores.is_empty())
+                        .then(|| valores.iter().sum::<f64>() / valores.len() as f64),
+                    aplicables: valores.len(),
+                    total: diagnosticos.len(),
+                },
+            }
+        })
+        .collect()
+}
+
 /// ¿El item tiene al menos un chunk en el corpus (recorte real)?
 pub fn item_tiene_chunks(repo: &crate::repositorio::RepositorioSqlite, item_id: &str) -> bool {
     let Ok(mut stmt) =
@@ -443,6 +568,166 @@ mod tests {
         de_prueba.pregunta = "huelga simulada de stress".into();
         let cadena = evaluar(&r, Some(&rec), &de_prueba, None);
         assert_eq!(cadena.retrieval_recall, Some(0.0));
+    }
+
+    #[test]
+    fn el_diagnostico_da_la_mejor_posicion_de_cada_grupo_en_cada_ordenamiento() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedFijo), Box::new(RerankIdentidad));
+        let mut p = pregunta(vec!["chunk-3".into(), "chunk-1".into(), "chunk-2".into()]);
+        p.pregunta = "huelga segundo".into();
+        // El primer grupo tiene dos copias; la peor va primero para que se vea
+        // que cuenta la mejor posición de cualquiera de ellas.
+        p.grupos_esperados = vec![
+            vec!["chunk-3".into(), "chunk-1".into()],
+            vec!["chunk-2".into()],
+        ];
+        // A profundidad 2: vectorial [chunk-1, chunk-2] (empate de coseno,
+        // orden de carga), léxica [chunk-3, chunk-1] y fusión
+        // [chunk-1 (1/61 + 1/62), chunk-3 (1/61)]; chunk-2 (1/62) queda fuera.
+        let d = diagnosticar_profundidad(&r, &rec, &p, &[1, 2]);
+        assert_eq!(d.pregunta_id, "test-1");
+        assert_eq!(d.profundidad, 2);
+        assert_eq!(
+            d.grupos,
+            vec![
+                PosicionGrupo {
+                    chunks: vec!["chunk-3".into(), "chunk-1".into()],
+                    vectorial: Some(1),
+                    lexica: Some(1),
+                    fusion: Some(1),
+                },
+                PosicionGrupo {
+                    chunks: vec!["chunk-2".into()],
+                    vectorial: Some(2),
+                    lexica: None,
+                    fusion: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn el_recall_de_la_fusion_cuenta_la_evidencia_solo_desde_su_posicion() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedFijo), Box::new(RerankIdentidad));
+        let mut p = pregunta(vec!["chunk-3".into(), "chunk-2".into()]);
+        p.pregunta = "huelga segundo".into();
+        // A profundidad 3 la fusión es [chunk-1 (1/61 + 1/62),
+        // chunk-3 (1/63 + 1/61), chunk-2 (1/62)].
+        let d = diagnosticar_profundidad(&r, &rec, &p, &[1, 2, 3]);
+        assert_eq!(d.grupos[0].fusion, Some(2));
+        assert_eq!(d.grupos[1].fusion, Some(3));
+        assert_eq!(
+            d.recall_fusion,
+            vec![
+                RecallEnK {
+                    k: 1,
+                    recall: Some(0.0)
+                },
+                RecallEnK {
+                    k: 2,
+                    recall: Some(0.5)
+                },
+                RecallEnK {
+                    k: 3,
+                    recall: Some(1.0)
+                },
+            ]
+        );
+    }
+
+    /// Embedder de prueba que no se debe llamar: la llamada sería paga.
+    struct EmbedProhibido;
+    impl crate::recuperacion::Embedder for EmbedProhibido {
+        fn embed(&self, _: &str) -> Result<Vec<f32>, String> {
+            panic!("sin evidencia esperada no hay nada que diagnosticar");
+        }
+    }
+
+    #[test]
+    fn sin_evidencia_el_diagnostico_no_aplica_y_no_consulta_al_recuperador() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedProhibido), Box::new(RerankIdentidad));
+        let p = pregunta(vec![]);
+        let d = diagnosticar_profundidad(&r, &rec, &p, &[8, 16]);
+        assert!(d.grupos.is_empty());
+        assert_eq!(
+            d.recall_fusion,
+            vec![
+                RecallEnK { k: 8, recall: None },
+                RecallEnK {
+                    k: 16,
+                    recall: None
+                },
+            ]
+        );
+    }
+
+    /// Embedder de prueba que falla como sin clave de API.
+    struct EmbedFalla;
+    impl crate::recuperacion::Embedder for EmbedFalla {
+        fn embed(&self, _: &str) -> Result<Vec<f32>, String> {
+            Err("sin clave de API".into())
+        }
+    }
+
+    #[test]
+    fn si_falla_la_pierna_semantica_el_diagnostico_lo_declara() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedFalla), Box::new(RerankIdentidad));
+        let mut p = pregunta(vec!["chunk-1".into()]);
+        p.pregunta = "huelga".into();
+        let d = diagnosticar_profundidad(&r, &rec, &p, &[8]);
+        // Sin la declaración, «v=-» en todas las preguntas se leería como un
+        // hallazgo sobre la pierna vectorial.
+        assert_eq!(d.grupos[0].vectorial, None);
+        assert_eq!(d.grupos[0].lexica, Some(1));
+        let motivo = d.degradacion.expect("la degradación tiene que viajar");
+        assert!(motivo.contains("sin pierna semántica"), "{motivo}");
+    }
+
+    fn diagnostico(id: &str, curva: &[(usize, Option<f64>)]) -> DiagnosticoProfundidad {
+        DiagnosticoProfundidad {
+            pregunta_id: id.into(),
+            profundidad: 16,
+            grupos: vec![],
+            recall_fusion: curva
+                .iter()
+                .map(|&(k, recall)| RecallEnK { k, recall })
+                .collect(),
+            degradacion: None,
+        }
+    }
+
+    #[test]
+    fn la_curva_media_promedia_cada_k_solo_sobre_las_preguntas_con_evidencia() {
+        let diagnosticos = [
+            diagnostico("a", &[(8, Some(0.5)), (16, Some(1.0))]),
+            diagnostico("b", &[(8, Some(0.0)), (16, Some(1.0))]),
+            diagnostico("sin-evidencia", &[(8, None), (16, None)]),
+        ];
+        assert_eq!(
+            resumir_profundidad(&diagnosticos, &[8, 16]),
+            vec![
+                RecallMedioEnK {
+                    k: 8,
+                    recall: Agregado {
+                        media: Some(0.25),
+                        aplicables: 2,
+                        total: 3
+                    }
+                },
+                RecallMedioEnK {
+                    k: 16,
+                    recall: Agregado {
+                        media: Some(1.0),
+                        aplicables: 2,
+                        total: 3
+                    }
+                },
+            ]
+        );
     }
 
     #[test]
