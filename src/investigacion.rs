@@ -165,6 +165,20 @@ struct Verification {
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Section {
+    /// Identidad de la sección dentro del informe: `s1`, `s2`, … en el orden
+    /// en que el redactor las entregó. Un informe anterior a las ediciones no
+    /// la trae y la recibe por orden al leerse.
+    #[serde(default)]
+    id: String,
+    /// 1 al redactar; cada edición o reescritura suma uno.
+    #[serde(default = "version_inicial")]
+    version: u32,
+    /// Quién escribió el texto vigente: `redactor` o `historiador`.
+    #[serde(default = "origen_redactor")]
+    origen: String,
+    /// Indicación del historiador que originó la última reescritura.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    indicacion: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -312,6 +326,14 @@ pub fn procesar(
             return Err(err);
         }
         return e.snapshot(id, false);
+    }
+    // Editar el informe es lo único que admite una investigación cerrada, y
+    // solo si cerró con informe: lo decide `informe_vigente`.
+    if op == "edit_section" {
+        return e.editar_seccion(id, &request);
+    }
+    if op == "rewrite_section" {
+        return e.reescribir_seccion(id, &workflow, &request);
     }
     e.transaction(|| {
         let status = e.job_status(id)?;
@@ -741,7 +763,12 @@ impl Engine<'_> {
             .map_err(err)?;
         let events=st.query_map([id],|r|{let s:Option<String>=r.get(2)?; Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"payload":s.and_then(|x|serde_json::from_str::<Value>(&x).ok()),"timestamp":r.get::<_,i64>(3)?}))}).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
         let mut st=self.db.conn().prepare("SELECT id,tipo,version,obsolete,content_json FROM artifacts WHERE job_id=?1 ORDER BY rowid").map_err(err)?;
-        let artifacts=st.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?.into_iter().map(|(id,kind,version,obsolete,s)|Ok(json!({"id":id,"kind":kind,"version":version,"obsolete":obsolete,"content":serde_json::from_str::<Value>(&s).map_err(err)?}))).collect::<Result<Vec<_>,String>>()?;
+        let mut artifacts=st.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?.into_iter().map(|(id,kind,version,obsolete,s)|Ok(json!({"id":id,"kind":kind,"version":version,"obsolete":obsolete,"content":serde_json::from_str::<Value>(&s).map_err(err)?}))).collect::<Result<Vec<_>,String>>()?;
+        // Un informe anterior a las ediciones se lee con sus secciones
+        // identificadas por orden, sin reescribirlo.
+        for a in artifacts.iter_mut().filter(|a| a["kind"] == "report") {
+            identificar_secciones(&mut a["content"]);
+        }
         let mut st=self.db.conn().prepare("SELECT id,alcance,stage_id,decision FROM human_decisions WHERE job_id=?1 AND obsolete=0 ORDER BY rowid").map_err(err)?;
         let gates=st.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"artifact_id":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?}))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
         let sources = artifacts
@@ -783,21 +810,38 @@ impl Engine<'_> {
     /// Toda llamada al modelo pasa por acá, no solo las de `call`: una que se
     /// contabilice sola gasta presupuesto invisible.
     fn abrir_llamada(&self, id: &str, role: &str) -> Result<String, String> {
-        let summary = self.summary(id)?;
-        if summary["llm_calls"].as_i64() >= summary["max_llm_calls"].as_i64() {
-            return Err("Presupuesto de llamadas agotado".into());
+        if let Some(motivo) = self.presupuesto_agotado(id)? {
+            return Err(motivo);
         }
-        if let Some(max) = summary["max_cost"].as_f64() {
-            if summary["cost"].as_f64().is_none_or(|c| c >= max) {
-                return Err("Costo agotado o desconocido: no se autoriza otra llamada".into());
-            }
-        }
+        self.registrar_llamada(id, role)
+    }
+    /// Abre el registro de la llamada sin consultar el presupuesto. Solo para
+    /// lo que pide el historiador: el presupuesto frena el gasto automático
+    /// del agente, no un pedido explícito. La llamada cuenta igual.
+    fn registrar_llamada(&self, id: &str, role: &str) -> Result<String, String> {
         let call = nuevo_id("call");
         self.db.conn().execute(
             "INSERT INTO llm_calls(id,job_id,rol,modelo,error,created_at) VALUES(?1,?2,?3,?4,'interrupted',?5)",
             params![call, id, role, self.llm.modelo(), ahora()],
         ).map_err(err)?;
         Ok(call)
+    }
+
+    /// Por qué el presupuesto del job ya no autoriza otra llamada, si es que
+    /// no la autoriza.
+    fn presupuesto_agotado(&self, id: &str) -> Result<Option<String>, String> {
+        let summary = self.summary(id)?;
+        if summary["llm_calls"].as_i64() >= summary["max_llm_calls"].as_i64() {
+            return Ok(Some("Presupuesto de llamadas agotado".into()));
+        }
+        if let Some(max) = summary["max_cost"].as_f64() {
+            if summary["cost"].as_f64().is_none_or(|c| c >= max) {
+                return Ok(Some(
+                    "Costo agotado o desconocido: no se autoriza otra llamada".into(),
+                ));
+            }
+        }
+        Ok(None)
     }
 
     /// Cierra el registro y acumula el costo reportado por el proveedor.
@@ -836,8 +880,28 @@ impl Engine<'_> {
         contract: &str,
         data: Value,
     ) -> Result<T, String> {
-        let call = self.abrir_llamada(id, role)?;
-        let input = json!({"role": role, "contract": contract, "data": data});
+        self.llamar(id, role, contract, data, false)
+    }
+    /// Una llamada al modelo. `pedida_por_historiador` la exime del freno del
+    /// presupuesto —se registra y cuenta igual— y la deja marcada en su
+    /// artefacto de entrada.
+    fn llamar<T: DeserializeOwned + Default>(
+        &self,
+        id: &str,
+        role: &str,
+        contract: &str,
+        data: Value,
+        pedida_por_historiador: bool,
+    ) -> Result<T, String> {
+        let call = if pedida_por_historiador {
+            self.registrar_llamada(id, role)?
+        } else {
+            self.abrir_llamada(id, role)?
+        };
+        let mut input = json!({"role": role, "contract": contract, "data": data});
+        if pedida_por_historiador {
+            input["pedida_por"] = json!("historiador");
+        }
         self.transaction(|| {
             self.artifact(id, &format!("input_{role}"), &input, false)?;
             Ok(())
@@ -994,17 +1058,7 @@ impl Engine<'_> {
                 let a = self.current(id, "archive")?;
                 let v: Verification = decode(self.current(id, "verification")?).unwrap_or_default();
                 let claims: Vec<Claim> = decode(a["claims"].clone()).unwrap_or_default();
-                let supported: HashSet<&str> = v
-                    .claims
-                    .iter()
-                    .filter(|c| {
-                        matches!(
-                            c.status,
-                            Some(Epistemic::Supported | Epistemic::PartiallySupported)
-                        )
-                    })
-                    .map(|c| c.id.as_str())
-                    .collect();
+                let supported = sostenidos(&v);
                 let supplied: Vec<&Claim> = claims
                     .iter()
                     .filter(|c| supported.contains(c.id.as_str()))
@@ -1021,6 +1075,14 @@ impl Engine<'_> {
                     request["question"].as_str().unwrap_or("Informe"),
                     &a["limitations"],
                 );
+                // La identidad se asigna sobre lo que sobrevivió al saneo: los
+                // ids no dejan huecos por secciones descartadas.
+                for (i, s) in o.sections.iter_mut().enumerate() {
+                    s.id = format!("s{}", i + 1);
+                    s.version = 1;
+                    s.origen = "redactor".into();
+                    s.indicacion = None;
+                }
                 cite_report(&mut o, &claims, &a["evidence"], &self.collections());
                 self.recordar(id, &supplied)?;
                 let mut contenido = json!({"report":o,"coverage":self.current(id,"coverage")?,"coverage_warning":self.current(id,"prospection")?,"archive_limitations":a["limitations"],"dropped_claims":a["dropped"],"role_warnings":self.role_warnings(id)?,"verification":v,"bibliography":self.current(id,"bibliography")?,"clarification":clarification,"profile":{"id":perfil.id,"name":perfil.nombre,"bias":perfil.sesgo_declarado},"retrieval_calls":self.llamadas_recuperacion(id)?});
@@ -1064,22 +1126,188 @@ impl Engine<'_> {
             Ok(())
         })?;
         if kind == "report" {
-            let path = self.dir.join(id);
-            std::fs::create_dir_all(&path).map_err(err)?;
-            std::fs::write(
-                path.join("report.json"),
-                serde_json::to_vec_pretty(&output).map_err(err)?,
-            )
-            .map_err(err)?;
-            // El mismo documento que viaja en el artefacto: una sola fuente
-            // de armado para el archivo en disco y para cualquier consumidor.
-            std::fs::write(
-                path.join("report.md"),
-                output["markdown"].as_str().unwrap_or_default(),
-            )
-            .map_err(err)?;
+            self.escribir_informe(id, &output)?;
         }
         Ok(())
+    }
+    /// Escribe `report.json` y `report.md` del informe vigente.
+    fn escribir_informe(&self, id: &str, contenido: &Value) -> Result<(), String> {
+        let path = self.dir.join(id);
+        std::fs::create_dir_all(&path).map_err(err)?;
+        std::fs::write(
+            path.join("report.json"),
+            serde_json::to_vec_pretty(contenido).map_err(err)?,
+        )
+        .map_err(err)?;
+        // El mismo documento que viaja en el artefacto: una sola fuente
+        // de armado para el archivo en disco y para cualquier consumidor.
+        std::fs::write(
+            path.join("report.md"),
+            contenido["markdown"].as_str().unwrap_or_default(),
+        )
+        .map_err(err)?;
+        Ok(())
+    }
+    /// El informe vigente, para editar una de sus secciones. Devuelve el id
+    /// del artefacto, su contenido completo y el informe decodificado.
+    ///
+    /// Solo lo tiene una investigación que cerró con informe: una cancelada,
+    /// fallida o todavía en curso no se edita por acá.
+    fn informe_vigente(&self, id: &str) -> Result<(String, Value, Report), String> {
+        let (status, reason): (String, Option<String>) = self
+            .db
+            .conn()
+            .query_row(
+                "SELECT status,close_reason FROM jobs WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(err)?;
+        if status != "done" || reason.as_deref() != Some("completed") {
+            return Err("La investigación no tiene informe para editar".into());
+        }
+        let previo = self.current_artifact_id(id, "report")?;
+        let mut contenido = self.current(id, "report")?;
+        identificar_secciones(&mut contenido);
+        let informe: Report = decode(contenido["report"].clone())?;
+        Ok((previo, contenido, informe))
+    }
+    /// Rearma el informe después de tocar una sección.
+    ///
+    /// La numeración de las citas es global y por orden de aparición: cambiar
+    /// una sección puede renumerar las siguientes, así que las citas y el
+    /// markdown se rearman sobre el informe completo. El resultado es una
+    /// versión nueva del artefacto `report`, colgada de la anterior y con el
+    /// resto del contenido intacto.
+    fn rearmar_informe(
+        &self,
+        id: &str,
+        previo: &str,
+        mut contenido: Value,
+        mut informe: Report,
+        evento: &str,
+        payload: Value,
+    ) -> Result<(), String> {
+        let archivo = self.current(id, "archive")?;
+        let claims: Vec<Claim> = decode(archivo["claims"].clone()).unwrap_or_default();
+        cite_report(
+            &mut informe,
+            &claims,
+            &archivo["evidence"],
+            &self.collections(),
+        );
+        contenido["report"] = json!(informe);
+        contenido["markdown"] = json!(crate::informe_render::render(&contenido));
+        self.transaction(|| {
+            self.artifact_con_padre(id, "report", &contenido, Some(previo))?;
+            self.event(id, evento, payload)
+        })?;
+        self.escribir_informe(id, &contenido)
+    }
+    /// `edit_section`: el historiador reescribe a mano el texto (y, si
+    /// quiere, el título) de una sección. Sin modelo: los `claim_ids` se
+    /// conservan y el texto queda marcado como no verificado.
+    fn editar_seccion(&self, id: &str, request: &Value) -> Result<Value, String> {
+        let seccion = required(request, "section_id")?;
+        let (previo, contenido, mut informe) = self.informe_vigente(id)?;
+        let s = informe
+            .sections
+            .iter_mut()
+            .find(|s| s.id == seccion)
+            .ok_or_else(|| format!("La sección «{seccion}» no existe en el informe"))?;
+        let texto = request["text"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or("El texto de la sección no puede quedar vacío")?;
+        if let Some(titulo) = request["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            s.title = titulo.into();
+        }
+        s.text = texto.into();
+        s.origen = "historiador".into();
+        s.version += 1;
+        s.indicacion = None;
+        let version = s.version;
+        self.rearmar_informe(
+            id,
+            &previo,
+            contenido,
+            informe,
+            "section_edited",
+            json!({"section_id":seccion,"version":version}),
+        )?;
+        self.snapshot(id, false)
+    }
+    /// `rewrite_section`: el redactor reescribe una sección siguiendo la
+    /// indicación del historiador, con la misma evidencia verificada que usó
+    /// el paso 7 —por eso no hace falta volver a verificar—.
+    ///
+    /// La salida se valida como en `sanitize_report`. Si no pasa, el informe
+    /// queda como estaba; la llamada ya quedó registrada.
+    fn reescribir_seccion(&self, id: &str, w: &Workflow, request: &Value) -> Result<Value, String> {
+        let seccion = required(request, "section_id")?;
+        let indicacion = required(request, "instruction")?.trim().to_string();
+        let (previo, contenido, mut informe) = self.informe_vigente(id)?;
+        let pos = informe
+            .sections
+            .iter()
+            .position(|s| s.id == seccion)
+            .ok_or_else(|| format!("La sección «{seccion}» no existe en el informe"))?;
+        let perfil = self.perfil(w);
+        let a = self.current(id, "archive")?;
+        let v: Verification = decode(self.current(id, "verification")?).unwrap_or_default();
+        let claims: Vec<Claim> = decode(a["claims"].clone()).unwrap_or_default();
+        let supported = sostenidos(&v);
+        let supplied: Vec<&Claim> = claims
+            .iter()
+            .filter(|c| supported.contains(c.id.as_str()))
+            .collect();
+        let actual = &informe.sections[pos];
+        let otras: Vec<&str> = informe
+            .sections
+            .iter()
+            .filter(|s| s.id != seccion)
+            .map(|s| s.title.as_str())
+            .collect();
+        let fuera_de_presupuesto = self.presupuesto_agotado(id)?.is_some();
+        let o: Section = self.llamar(
+            id, "asistente_redaccion",
+            "{title:string,text:string,claim_ids:string[]}; reescribí una sola sección del informe siguiendo instruction, la indicación del historiador. Sin búsqueda. Usá solo las afirmaciones de claims, que son las verificadas, y conservá sus IDs en claim_ids. No agregues hechos nuevos. No escribas citas ni referencias: el código reproduce los fragmentos a partir de los claim_ids. No repitas lo que ya cubren other_sections. Respetá el encuadre que el investigador respondió en clarification.",
+            json!({"claims":supplied,"section":{"title":actual.title,"text":actual.text,"claim_ids":actual.claim_ids},"instruction":indicacion,"other_sections":otras,"profile":{"id":perfil.id,"name":perfil.nombre},"clarification":self.current(id, "clarification").unwrap_or(Value::Null)}),
+            true,
+        )?;
+        if o.text.trim().is_empty() {
+            return Err("La reescritura volvió sin texto: el informe queda como estaba".into());
+        }
+        if !o.claim_ids.iter().all(|c| supported.contains(c.as_str())) {
+            return Err(
+                "La reescritura cita afirmaciones que no están verificadas: el informe queda como estaba"
+                    .into(),
+            );
+        }
+        let s = &mut informe.sections[pos];
+        if !o.title.trim().is_empty() {
+            s.title = o.title;
+        }
+        s.text = o.text;
+        s.claim_ids = o.claim_ids;
+        s.origen = "redactor".into();
+        s.version += 1;
+        s.indicacion = Some(indicacion.clone());
+        let version = s.version;
+        self.rearmar_informe(
+            id,
+            &previo,
+            contenido,
+            informe,
+            "section_rewritten",
+            json!({"section_id":seccion,"version":version,"indicacion":indicacion,"fuera_de_presupuesto":fuera_de_presupuesto}),
+        )?;
+        self.snapshot(id, false)
     }
     /// Lleva a los topes un plan propuesto por el modelo: el límite de
     /// recuperación al techo de `RERANK_DEPTH` y las consultas al tope del
@@ -2058,6 +2286,51 @@ fn validate_plan(p: &Plan, max_consultas: usize) -> Result<(), String> {
         Ok(())
     }
 }
+/// Ids de los claims que la verificación sostuvo, total o parcialmente: lo
+/// único que el redactor puede usar.
+fn sostenidos(v: &Verification) -> HashSet<&str> {
+    v.claims
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.status,
+                Some(Epistemic::Supported | Epistemic::PartiallySupported)
+            )
+        })
+        .map(|c| c.id.as_str())
+        .collect()
+}
+/// Identifica las secciones de un informe anterior a las ediciones: el id
+/// por orden y los valores de una sección recién redactada. Opera sobre la
+/// copia leída; lo guardado no se reescribe.
+fn identificar_secciones(contenido: &mut Value) {
+    let Some(secciones) = contenido
+        .get_mut("report")
+        .and_then(|r| r.get_mut("sections"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for (i, s) in secciones.iter_mut().enumerate() {
+        let Some(s) = s.as_object_mut() else {
+            continue;
+        };
+        if s.get("id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            s.insert("id".into(), json!(format!("s{}", i + 1)));
+        }
+        s.entry("version").or_insert(json!(version_inicial()));
+        s.entry("origen").or_insert(json!(origen_redactor()));
+    }
+}
+fn version_inicial() -> u32 {
+    1
+}
+fn origen_redactor() -> String {
+    "redactor".into()
+}
 fn sanitize_report(
     mut o: Report,
     supported: &HashSet<&str>,
@@ -2086,8 +2359,7 @@ fn sanitize_report(
         o.sections.push(Section {
             title: "Limitaciones".into(),
             text,
-            claim_ids: vec![],
-            quotes: vec![],
+            ..Default::default()
         });
     }
     o

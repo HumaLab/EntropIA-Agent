@@ -2750,3 +2750,539 @@ fn editar_el_plan_con_la_ronda_abierta_no_la_saltea() {
         "plan"
     );
 }
+
+/// Redactor guionado: entrega un informe de dos secciones y reescribe una
+/// sección citando los `claim_ids` que el test le indique. El resto de los
+/// roles los responde `Model`.
+struct Redactor {
+    base: Model,
+    /// `claim_ids` que devuelve la reescritura de una sección.
+    claim_ids_reescritura: Value,
+}
+impl ClienteLlm for Redactor {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        let s = m[0]["content"].as_str().unwrap();
+        if s.contains("Rol: asistente_redaccion.") && s.contains("reescribí una sola sección") {
+            Ok(TurnoAgente::Texto(
+                json!({"title":"Contexto reescrito","text":"El gremio llegó a la huelga tras un conflicto largo","claim_ids":self.claim_ids_reescritura})
+                    .to_string(),
+            ))
+        } else if s.contains("Rol: asistente_redaccion.") {
+            Ok(TurnoAgente::Texto(
+                json!({"title":"Huelga","sections":[
+                    {"title":"Hechos","text":"Hubo una huelga","claim_ids":["c1"]},
+                    {"title":"Contexto","text":"El gremio venía de un conflicto largo","claim_ids":[]}
+                ]})
+                .to_string(),
+            ))
+        } else {
+            self.base.turno_agente(m, t)
+        }
+    }
+}
+
+fn redactor() -> Redactor {
+    redactor_que_cita(json!(["c1"]))
+}
+
+fn redactor_que_cita(claim_ids: Value) -> Redactor {
+    Redactor {
+        base: modelo(false, false),
+        claim_ids_reescritura: claim_ids,
+    }
+}
+
+/// Secciones del informe vigente en un snapshot.
+fn secciones(snapshot: &Value) -> Vec<Value> {
+    artefacto(snapshot, "report")["report"]["sections"]
+        .as_array()
+        .expect("el informe tiene que traer secciones")
+        .clone()
+}
+
+#[test]
+fn al_redactar_cada_seccion_tiene_id_version_y_origen() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("secciones-id-artifacts");
+    let m = redactor();
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out = correr_con(&db, &repo, &m, None, &dir, &id);
+
+    let secciones = secciones(&out);
+    assert_eq!(secciones.len(), 2, "{secciones:?}");
+    for (i, s) in secciones.iter().enumerate() {
+        assert_eq!(s["id"], format!("s{}", i + 1), "{s}");
+        assert_eq!(s["version"], 1, "{s}");
+        assert_eq!(s["origen"], "redactor", "{s}");
+        assert!(s["indicacion"].is_null(), "{s}");
+    }
+}
+
+/// Artefactos `report` de un snapshot, en orden de escritura.
+fn informes(snapshot: &Value) -> Vec<Value> {
+    snapshot["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["kind"] == "report")
+        .cloned()
+        .collect()
+}
+
+/// Cada número citado tiene su referencia y la numeración es correlativa
+/// desde 1.
+fn numeracion_consistente(informe: &Value) {
+    let usados: std::collections::BTreeSet<i64> = informe["report"]["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["quotes"].as_array().unwrap().iter())
+        .map(|q| q["n"].as_i64().unwrap())
+        .collect();
+    let declarados: std::collections::BTreeSet<i64> = informe["report"]["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["n"].as_i64().unwrap())
+        .collect();
+    assert_eq!(usados, declarados, "hay números citados sin referencia");
+    assert_eq!(
+        declarados.iter().copied().collect::<Vec<_>>(),
+        (1..=declarados.len() as i64).collect::<Vec<_>>(),
+        "la numeración tiene que ser correlativa desde 1"
+    );
+}
+
+const AVISO_EDICION: &str =
+    "Sección editada por el historiador: el texto no pasó por la verificación";
+
+#[test]
+fn editar_una_seccion_de_una_investigacion_cerrada_versiona_el_informe() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("editar-seccion-artifacts");
+    let m = redactor();
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cerrada = correr_con(&db, &repo, &m, None, &dir, &id);
+    let previo = artefacto(&cerrada, "report");
+    let previo_id = id_vigente(&cerrada, "report");
+    let llamadas = cerrada["job"]["llm_calls"].clone();
+    let texto = "El conflicto venía de antes: ver el tramo [9] del expediente.";
+
+    let editada = procesar(&db,&repo,&m,None,&dir,json!({"op":"edit_section","job_id":id,"section_id":"s2","title":"Contexto gremial","text":texto})).unwrap();
+
+    // La investigación sigue cerrada con su informe, y editar no gasta modelo.
+    assert_eq!(editada["job"]["status"], "done");
+    assert_eq!(editada["job"]["close_reason"], "completed");
+    assert_eq!(editada["job"]["llm_calls"], llamadas);
+
+    // Versión nueva del informe; la anterior queda intacta.
+    let versiones = informes(&editada);
+    assert_eq!(versiones.len(), 2, "{versiones:?}");
+    assert_eq!(versiones[0]["id"], previo_id);
+    assert_eq!(versiones[0]["content"], previo);
+    assert_eq!(versiones[1]["version"], 2);
+    let nuevo = artefacto(&editada, "report");
+
+    // Solo cambia la sección tocada, y conserva sus claims.
+    let antes = previo["report"]["sections"].as_array().unwrap();
+    let despues = nuevo["report"]["sections"].as_array().unwrap();
+    assert_eq!(despues.len(), 2);
+    assert_eq!(despues[0], antes[0], "la otra sección no puede cambiar");
+    let s2 = &despues[1];
+    assert_eq!(s2["id"], "s2");
+    assert_eq!(s2["title"], "Contexto gremial");
+    assert_eq!(s2["text"], texto);
+    assert_eq!(s2["origen"], "historiador");
+    assert_eq!(s2["version"], 2);
+    assert_eq!(s2["claim_ids"], antes[1]["claim_ids"]);
+
+    // El resto del contenido viaja igual.
+    for clave in [
+        "coverage",
+        "coverage_warning",
+        "archive_limitations",
+        "dropped_claims",
+        "role_warnings",
+        "verification",
+        "bibliography",
+        "clarification",
+        "profile",
+        "retrieval_calls",
+    ] {
+        assert_eq!(nuevo[clave], previo[clave], "{clave}");
+    }
+
+    // Las citas se rearman sobre el informe completo.
+    numeracion_consistente(&nuevo);
+    assert_eq!(
+        nuevo["report"]["references"],
+        previo["report"]["references"]
+    );
+
+    // El markdown declara la edición, solo en la sección editada, y el
+    // corchete del historiador no se cuenta como cita.
+    let md = nuevo["markdown"].as_str().unwrap();
+    assert_eq!(md.matches(AVISO_EDICION).count(), 1, "{md}");
+    assert!(md.contains("## Contexto gremial"), "{md}");
+    assert!(
+        entropia_agent::informe_render::citas_sin_referencia(md).is_empty(),
+        "{md}"
+    );
+
+    // Una sola fuente de armado: el disco lleva la versión nueva.
+    assert_eq!(
+        std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap(),
+        md
+    );
+    let en_disco: Value =
+        serde_json::from_slice(&std::fs::read(dir.join(&id).join("report.json")).unwrap()).unwrap();
+    assert_eq!(en_disco, nuevo);
+
+    let evento = eventos(&editada, "section_edited");
+    assert_eq!(evento.len(), 1, "{evento:?}");
+    assert_eq!(evento[0]["payload"]["section_id"], "s2");
+    assert_eq!(evento[0]["payload"]["version"], 2);
+}
+
+#[test]
+fn editar_una_seccion_rechaza_la_inexistente_el_texto_vacio_y_la_investigacion_sin_informe() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("editar-rechazos-artifacts");
+    let m = redactor();
+    let editar = |id: &str, seccion: &str, texto: &str| {
+        procesar(
+            &db,
+            &repo,
+            &m,
+            None,
+            &dir,
+            json!({"op":"edit_section","job_id":id,"section_id":seccion,"text":texto}),
+        )
+    };
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    correr_con(&db, &repo, &m, None, &dir, &id);
+
+    let error = editar(&id, "s9", "Texto nuevo").unwrap_err();
+    assert!(error.contains("no existe"), "{error}");
+    let error = editar(&id, "s1", "   ").unwrap_err();
+    assert!(error.contains("vacío"), "{error}");
+    // Un rechazo no deja rastro: ni versión nueva ni evento.
+    let intacta = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    assert_eq!(informes(&intacta).len(), 1);
+    assert!(eventos(&intacta, "section_edited").is_empty());
+
+    // Sin informe no hay nada que editar: ni en curso ni cancelada.
+    let otra = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let error = editar(&otra, "s1", "Texto nuevo").unwrap_err();
+    assert!(error.contains("no tiene informe"), "{error}");
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"cancel","job_id":otra}),
+    )
+    .unwrap();
+    let error = editar(&otra, "s1", "Texto nuevo").unwrap_err();
+    assert!(error.contains("no tiene informe"), "{error}");
+}
+
+#[test]
+fn reescribir_una_seccion_llama_una_vez_al_redactor_y_rechaza_claims_no_verificados() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("reescribir-seccion-artifacts");
+    let m = redactor();
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cerrada = correr_con(&db, &repo, &m, None, &dir, &id);
+    let previo = artefacto(&cerrada, "report");
+    let llamadas = cerrada["job"]["llm_calls"].as_i64().unwrap();
+    let indicacion = "Situalo en la huelga de marzo";
+
+    let reescrita = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"rewrite_section","job_id":id,"section_id":"s2","instruction":indicacion}),
+    )
+    .unwrap();
+
+    // Una sola llamada al redactor, con la indicación y la misma evidencia
+    // verificada del paso 7.
+    assert_eq!(reescrita["job"]["status"], "done");
+    assert_eq!(reescrita["job"]["llm_calls"], llamadas + 1);
+    let pedidos = entradas(&reescrita, "asistente_redaccion");
+    assert_eq!(pedidos.len(), 2, "el informe y la reescritura");
+    let pedido = &pedidos[1]["data"];
+    assert_eq!(pedido["instruction"], indicacion);
+    assert_eq!(
+        pedido["section"]["text"],
+        previo["report"]["sections"][1]["text"]
+    );
+    assert_eq!(pedido["other_sections"], json!(["Hechos"]));
+    assert_eq!(pedido["claims"], pedidos[0]["data"]["claims"]);
+
+    // Versión nueva: cambia solo la sección pedida, y sus citas se arman
+    // desde los claims nuevos.
+    assert_eq!(informes(&reescrita).len(), 2);
+    let nuevo = artefacto(&reescrita, "report");
+    let despues = nuevo["report"]["sections"].as_array().unwrap();
+    assert_eq!(despues[0], previo["report"]["sections"][0]);
+    let s2 = &despues[1];
+    assert_eq!(s2["id"], "s2");
+    assert_eq!(s2["title"], "Contexto reescrito");
+    assert_eq!(s2["origen"], "redactor");
+    assert_eq!(s2["version"], 2);
+    assert_eq!(s2["indicacion"], indicacion);
+    assert_eq!(s2["claim_ids"], json!(["c1"]));
+    assert!(!s2["quotes"].as_array().unwrap().is_empty(), "{s2}");
+    numeracion_consistente(&nuevo);
+    let md = nuevo["markdown"].as_str().unwrap();
+    assert!(!md.contains(AVISO_EDICION), "{md}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap(),
+        md
+    );
+    let evento = eventos(&reescrita, "section_rewritten");
+    assert_eq!(evento.len(), 1, "{evento:?}");
+    assert_eq!(evento[0]["payload"]["section_id"], "s2");
+    assert_eq!(evento[0]["payload"]["version"], 2);
+    assert_eq!(evento[0]["payload"]["indicacion"], indicacion);
+    assert_eq!(evento[0]["payload"]["fuera_de_presupuesto"], false);
+
+    // Una reescritura que cita claims no verificados se rechaza: el informe
+    // queda igual, pero la llamada ya quedó registrada.
+    let inventa = redactor_que_cita(json!(["c9"]));
+    let error = procesar(
+        &db,
+        &repo,
+        &inventa,
+        None,
+        &dir,
+        json!({"op":"rewrite_section","job_id":id,"section_id":"s1","instruction":"Ampliá"}),
+    )
+    .unwrap_err();
+    assert!(error.contains("no están verificad"), "{error}");
+    let despues = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    assert_eq!(informes(&despues).len(), 2);
+    assert_eq!(artefacto(&despues, "report"), nuevo);
+    assert_eq!(despues["job"]["llm_calls"], llamadas + 2);
+    assert_eq!(eventos(&despues, "section_rewritten").len(), 1);
+}
+
+#[test]
+fn con_el_presupuesto_agotado_la_reescritura_igual_corre_y_queda_registrada() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let dir = path.with_extension("presupuesto-seccion-artifacts");
+    let m = redactor();
+
+    // Una corrida completa mide cuántas llamadas consume la investigación.
+    let medida = EstadoDb::abrir_en_memoria().unwrap();
+    let id = create(&medida, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let necesarias = correr_con(&medida, &repo, &m, None, &dir, &id)["job"]["llm_calls"]
+        .as_i64()
+        .unwrap();
+
+    // Con exactamente ese presupuesto, cierra con el presupuesto agotado.
+    let state = path.with_extension("presupuesto-seccion-state.sqlite");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let id = procesar(&db,&repo,&m,None,&dir,json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":necesarias,"max_cost":1.0})).unwrap()["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cerrada = correr_con(&db, &repo, &m, None, &dir, &id);
+    assert_eq!(cerrada["job"]["llm_calls"], cerrada["job"]["max_llm_calls"]);
+    let costo = cerrada["job"]["cost"].as_f64().unwrap();
+
+    // El presupuesto frena el gasto automático del agente, no un pedido
+    // explícito del historiador.
+    let reescrita = procesar(&db,&repo,&m,None,&dir,json!({"op":"rewrite_section","job_id":id,"section_id":"s2","instruction":"Situalo en la huelga de marzo"})).unwrap();
+    assert_eq!(reescrita["job"]["llm_calls"], necesarias + 1);
+    assert!(
+        (reescrita["job"]["cost"].as_f64().unwrap() - costo - 0.01).abs() < 1e-9,
+        "{}",
+        reescrita["job"]
+    );
+    assert_eq!(informes(&reescrita).len(), 2);
+    let evento = eventos(&reescrita, "section_rewritten");
+    assert_eq!(evento[0]["payload"]["fuera_de_presupuesto"], true);
+
+    // La llamada queda asentada como pedida por el historiador; las del
+    // agente, no.
+    let pedidos = entradas(&reescrita, "asistente_redaccion");
+    assert!(pedidos[0].get("pedida_por").is_none(), "{}", pedidos[0]);
+    assert_eq!(pedidos[1]["pedida_por"], "historiador");
+    let conn = rusqlite::Connection::open(&state).unwrap();
+    let (rol, costo_llamada): (String, f64) = conn
+        .query_row(
+            "SELECT rol,costo FROM llm_calls WHERE job_id=?1 ORDER BY rowid DESC LIMIT 1",
+            [&id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(rol, "asistente_redaccion");
+    assert!((costo_llamada - 0.01).abs() < 1e-9);
+}
+
+#[test]
+fn un_informe_sin_ids_admite_editar_por_el_id_asignado_por_orden() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("informe-sin-ids-state.sqlite");
+    let dir = path.with_extension("informe-sin-ids-artifacts");
+    let m = redactor();
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    correr_con(&db, &repo, &m, None, &dir, &id);
+    drop(db);
+
+    // Se fuerza un informe anterior al cambio: secciones sin identidad.
+    let sin_ids = {
+        let conn = rusqlite::Connection::open(&state).unwrap();
+        let (artefacto_id, contenido): (String, String) = conn
+            .query_row(
+                "SELECT id,content_json FROM artifacts WHERE job_id=?1 AND tipo='report'",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let mut contenido: Value = serde_json::from_str(&contenido).unwrap();
+        for s in contenido["report"]["sections"].as_array_mut().unwrap() {
+            let s = s.as_object_mut().unwrap();
+            for campo in ["id", "version", "origen", "indicacion"] {
+                s.remove(campo);
+            }
+        }
+        conn.execute(
+            "UPDATE artifacts SET content_json=?1 WHERE id=?2",
+            rusqlite::params![contenido.to_string(), artefacto_id],
+        )
+        .unwrap();
+        contenido.to_string()
+    };
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+
+    // Al leerlo, cada sección recibe su id por orden.
+    let leido = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    let ids: Vec<Value> = secciones(&leido).iter().map(|s| s["id"].clone()).collect();
+    assert_eq!(ids, vec![json!("s1"), json!("s2")]);
+
+    let editado = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"edit_section","job_id":id,"section_id":"s2","text":"Texto del historiador"}),
+    )
+    .unwrap();
+    let nuevas = secciones(&editado);
+    assert_eq!(nuevas[0]["id"], "s1");
+    assert_eq!(nuevas[0]["version"], 1);
+    assert_eq!(nuevas[0]["origen"], "redactor");
+    assert_eq!(nuevas[1]["id"], "s2");
+    assert_eq!(nuevas[1]["version"], 2);
+    assert_eq!(nuevas[1]["origen"], "historiador");
+    assert_eq!(nuevas[1]["text"], "Texto del historiador");
+
+    // El informe anterior no se reescribió al leerlo.
+    let conn = rusqlite::Connection::open(&state).unwrap();
+    let guardado: String = conn
+        .query_row(
+            "SELECT content_json FROM artifacts WHERE job_id=?1 AND tipo='report' AND version=1",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(guardado, sin_ids);
+}
+
+#[test]
+fn en_una_investigacion_cerrada_las_demas_operaciones_siguen_rechazadas() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("cerrada-rechazos-artifacts");
+    let m = redactor();
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cerrada = correr_con(&db, &repo, &m, None, &dir, &id);
+    // Editar una sección no reabre la investigación.
+    procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"edit_section","job_id":id,"section_id":"s1","text":"Texto del historiador"}),
+    )
+    .unwrap();
+
+    let plan = json!({"queries":["paro"],"bibliography_queries":[],"retrieval_limit":5});
+    for pedido in [
+        json!({"op":"pause","job_id":id}),
+        json!({"op":"resume","job_id":id}),
+        json!({"op":"cancel","job_id":id}),
+        json!({"op":"update_budget","job_id":id,"max_llm_calls":60,"max_cost":2}),
+        json!({"op":"decision","job_id":id,"gate_id":"gate-inexistente","approve":true}),
+        json!({"op":"answer","job_id":id,"answers":[{"id":"q1","text":"1965"}]}),
+        json!({"op":"revise","job_id":id,"artifact_id":id_vigente(&cerrada, "plan"),"content":plan}),
+    ] {
+        let error = procesar(&db, &repo, &m, None, &dir, pedido.clone()).unwrap_err();
+        assert!(error.contains("cerrada"), "{pedido}: {error}");
+    }
+    assert!(procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id})
+    )
+    .is_err());
+
+    let despues = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id})).unwrap();
+    assert_eq!(despues["job"]["status"], "done");
+    assert_eq!(despues["job"]["close_reason"], "completed");
+    assert_eq!(informes(&despues).len(), 2, "el informe y su edición");
+}

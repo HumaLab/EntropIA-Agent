@@ -29,9 +29,21 @@ pub fn render(artifact: &Value) -> String {
     for section in report["sections"].as_array().into_iter().flatten() {
         let titulo = section["title"].as_str().unwrap_or("Sección");
         out.push_str(&format!("## {titulo}\n\n"));
+        // El texto que escribió el historiador no pasó por la verificación:
+        // se declara, y sus corchetes se neutralizan como los del encuadre.
+        let editada = section["origen"] == "historiador";
+        if editada {
+            out.push_str(
+                "*Sección editada por el historiador: el texto no pasó por la verificación.*\n\n",
+            );
+        }
         let texto = section["text"].as_str().unwrap_or("").trim();
         if !texto.is_empty() {
-            out.push_str(texto);
+            if editada {
+                out.push_str(&sin_corchetes(texto));
+            } else {
+                out.push_str(texto);
+            }
             out.push_str("\n\n");
         }
         for quote in section["quotes"].as_array().into_iter().flatten() {

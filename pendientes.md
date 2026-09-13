@@ -12,10 +12,12 @@ trabajo de Fase 7 sin commitear.
 | 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | **Resuelto** con otro diseño (`bbc5457`, `a244f47`; UI en Pro-Lite `c7b59a3`) |
 | 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | Primera pasada en Lite hecha; faltan gates y Pro |
 | 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | En curso: banco de 32 (22 miden); profundidad 16, 24 por pierna y fusión (1,1) confirmadas con datos; falta crecer el banco y medir con las consultas del plan |
-| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | Abierto (ya no depende de nada) |
+| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | En curso: editar a mano y reescribir con indicación (spec `2fab365`) |
 | 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | Abierto |
 | 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | **Resuelto**: palabras vacías y repetidos fuera antes del tope (léxica 0.48 → 0.68, híbrida 0.82 → 0.89) |
 | 8 | La fusión RRF desempata al azar | Defecto | Chico | **Resuelto**: orden total (puntaje, mejor puesto de pierna, id) y chunks cargados por id |
+| 9 | «Limitaciones» puede salir duplicada en el informe | Defecto | Chico | Abierto: el prompt del redactor pide la sección (`src/investigacion.rs:1015`) y `informe_render` arma otra (`:211-264`) |
+| 10 | `informe_secciones` escribe filas sin `content_json` | Deuda latente | Chico | Abierto: romperían `get` si se mezclaran con un job de investigación; no lo usa el workflow |
 
 **Estado al 2026-09-11 (tarde).**
 - #1 y #2 están en `main` de los dos repos y publicados; el pin del motor en Pro-Lite apunta a
