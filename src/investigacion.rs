@@ -762,8 +762,10 @@ impl Engine<'_> {
             )
             .map_err(err)?;
         let events=st.query_map([id],|r|{let s:Option<String>=r.get(2)?; Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"payload":s.and_then(|x|serde_json::from_str::<Value>(&x).ok()),"timestamp":r.get::<_,i64>(3)?}))}).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
+        // Un artefacto ajeno al workflow puede no traer contenido: se lee como
+        // nulo antes que romper la lectura de la investigación entera.
         let mut st=self.db.conn().prepare("SELECT id,tipo,version,obsolete,content_json FROM artifacts WHERE job_id=?1 ORDER BY rowid").map_err(err)?;
-        let mut artifacts=st.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?.into_iter().map(|(id,kind,version,obsolete,s)|Ok(json!({"id":id,"kind":kind,"version":version,"obsolete":obsolete,"content":serde_json::from_str::<Value>(&s).map_err(err)?}))).collect::<Result<Vec<_>,String>>()?;
+        let mut artifacts=st.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,bool>(3)?,r.get::<_,Option<String>>(4)?))).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?.into_iter().map(|(id,kind,version,obsolete,s)|{let content=match s{Some(s)=>serde_json::from_str::<Value>(&s).map_err(err)?,None=>Value::Null};Ok(json!({"id":id,"kind":kind,"version":version,"obsolete":obsolete,"content":content}))}).collect::<Result<Vec<_>,String>>()?;
         // Un informe anterior a las ediciones se lee con sus secciones
         // identificadas por orden, sin reescribirlo.
         for a in artifacts.iter_mut().filter(|a| a["kind"] == "report") {

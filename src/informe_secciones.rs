@@ -64,15 +64,16 @@ impl<'a> InformeSecciones<'a> {
         self.db
             .conn()
             .execute(
-                "INSERT INTO artifacts (id, job_id, tipo, path, padre, version, created_at) \
-                 VALUES (?1, ?2, 'seccion', ?3, ?4, ?5, ?6)",
+                "INSERT INTO artifacts (id, job_id, tipo, path, padre, version, created_at, content_json) \
+                 VALUES (?1, ?2, 'seccion', ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     artefacto_id,
                     job_id,
                     ruta.to_str().unwrap_or(""),
                     seccion.id,
                     nueva_version,
-                    ahora()
+                    ahora(),
+                    contenido_json(seccion, nueva_version, &ruta)
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -93,7 +94,6 @@ impl<'a> InformeSecciones<'a> {
         )?;
         Ok(ruta)
     }
-
     /// Versión actual de una sección (0 si nunca se guardó).
     pub fn version_actual(&self, job_id: &str, seccion_id: &str) -> i64 {
         self.db
@@ -135,6 +135,19 @@ impl<'a> InformeSecciones<'a> {
         };
         rows.filter_map(|r| r.ok()).collect()
     }
+}
+
+/// Contenido de la fila de artefacto: quien lee el job entiende la sección sin
+/// abrir el archivo, y la lectura del snapshot no se topa con un nulo.
+fn contenido_json(seccion: &SeccionInforme, version: i64, ruta: &Path) -> String {
+    serde_json::json!({
+        "seccion": seccion.id,
+        "titulo": seccion.titulo,
+        "version": version,
+        "provenance": seccion.provenance,
+        "ruta": ruta.to_str().unwrap_or(""),
+    })
+    .to_string()
 }
 
 /// Render de una sección versionada con su provenance.

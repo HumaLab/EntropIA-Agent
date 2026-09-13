@@ -17,7 +17,7 @@ trabajo de Fase 7 sin commitear.
 | 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | **Resuelto**: palabras vacías y repetidos fuera antes del tope (léxica 0.48 → 0.68, híbrida 0.82 → 0.89) |
 | 8 | La fusión RRF desempata al azar | Defecto | Chico | **Resuelto**: orden total (puntaje, mejor puesto de pierna, id) y chunks cargados por id |
 | 9 | «Limitaciones» puede salir duplicada en el informe | Defecto | Chico | **Resuelto**: la lista automática va dentro de la sección del redactor, y el prompt pide limitaciones de interpretación |
-| 10 | `informe_secciones` escribe filas sin `content_json` | Deuda latente | Chico | Abierto: romperían `get` si se mezclaran con un job de investigación; no lo usa el workflow |
+| 10 | `informe_secciones` escribe filas sin `content_json` | Deuda latente | Chico | **Resuelto**: la fila lleva el contenido de la sección y la lectura tolera un artefacto sin contenido |
 
 **Estado al 2026-09-11 (tarde).**
 - #1 y #2 están en `main` de los dos repos y publicados; el pin del motor en Pro-Lite apunta a

@@ -3286,3 +3286,41 @@ fn en_una_investigacion_cerrada_las_demas_operaciones_siguen_rechazadas() {
     assert_eq!(despues["job"]["close_reason"], "completed");
     assert_eq!(informes(&despues).len(), 2, "el informe y su edición");
 }
+
+#[test]
+fn una_seccion_guardada_no_rompe_la_lectura_de_la_investigacion() {
+    // `informe_secciones` escribe filas de artefacto en la misma base. Un
+    // artefacto sin contenido no puede voltear la lectura del job entero.
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("seccion-suelta-artifacts");
+    let m = modelo(false, false);
+    let id = create(&db, &repo, &m, &dir)["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let secciones = entropia_agent::informe_secciones::InformeSecciones::nuevo(&db, &dir);
+    secciones
+        .guardar_seccion(
+            &id,
+            &entropia_agent::informe_secciones::SeccionInforme {
+                id: "hechos".into(),
+                titulo: "Hechos".into(),
+                contenido: "El gremio paró en octubre.".into(),
+                version: 1,
+                provenance: vec!["chunk-1".into()],
+            },
+        )
+        .expect("la sección se guarda");
+
+    let out = procesar(&db, &repo, &m, None, &dir, json!({"op":"get","job_id":id}))
+        .expect("la investigación se sigue leyendo");
+    let seccion = out["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["kind"] == "seccion")
+        .expect("la sección figura entre los artefactos");
+    assert_eq!(seccion["content"]["provenance"][0], "chunk-1", "{seccion}");
+}
