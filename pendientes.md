@@ -11,9 +11,10 @@ trabajo de Fase 7 sin commitear.
 | 1 | Límites de recuperación: por búsqueda (promete 100, entrega 16) y por plan (20 fijo) | Defecto de contrato | Chico-mediano | **Resuelto** (`3ac3915`, `2e6f2f5`) |
 | 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | **Resuelto** con otro diseño (`bbc5457`, `a244f47`; UI en Pro-Lite `c7b59a3`) |
 | 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | Primera pasada en Lite hecha; faltan gates y Pro |
-| 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | Abierto |
+| 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | En curso: medición arreglada; banco de 32 preguntas, 22 miden |
 | 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | Abierto (ya no depende de nada) |
 | 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | Abierto |
+| 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | Abierto (medible con el bench) |
 
 **Estado al 2026-09-11 (tarde).**
 - #1 y #2 están en `main` de los dos repos y publicados; el pin del motor en Pro-Lite apunta a
@@ -298,3 +299,32 @@ tipo en Rust ya tiene esa forma (`Fecha { anio, mes: Option, dia: Option }`,
 `(1965, 3, 12)`. Una consulta SQL `ORDER BY year, month, day` ordena bien las tres. Los
 tests de `fechas.rs` que afirman `"1948-00-00"` (`:499`, `:517`, `:531`) se revisan
 según `iso()` se conserve o se retire.
+
+---
+
+## 7. La consulta léxica usa solo las primeras 12 palabras
+
+**Problema.** `fts5_query` arma la consulta FTS5 con los primeros 12 tokens válidos y
+descarta el resto, sin filtrar antes las palabras vacías. En una pregunta larga, el
+preámbulo consume el cupo y los términos que importan quedan afuera. Afecta a toda la
+búsqueda léxica del agente: la pierna léxica del recuperador híbrido, el modo solo léxico
+del workflow y la línea base del bench.
+
+**Evidencia.**
+- `src/repositorio.rs:410-419`: `.filter(es_token_valido).take(12)`; `es_token_valido`
+  (`:423-426`) solo exige más de 2 caracteres, así que «según», «item», «qué» o «colección»
+  cuentan como términos.
+- Diagnóstico de `soip-006` (2026-09-12): con la redacción original, el preámbulo «Según el
+  item «65-03-03» (Conflicto SOIP 1965-66)» consumía 9 de los 12 tokens; «plenario» y
+  «ciudad» eran el 13 y el 14. El fragmento esperado no aparecía en la búsqueda léxica ni
+  con límite 400. La pregunta se reformuló; el defecto sigue.
+
+**Propuesta.**
+1. Filtrar palabras vacías del español (interrogativos, artículos, preposiciones y
+   términos del propio sistema como «ítem» o «colección») antes de aplicar el tope.
+2. Revisar el tope con el bench: medir léxico e híbrido con 12, 24 y sin tope sobre el
+   banco actual, que ya tiene preguntas difíciles para lo léxico (tanda 2).
+
+**Cómo se verifica.** Un test de `fts5_query` con una pregunta cuyo término clave está
+después de la palabra 12. La corrida del bench antes y después, comparando la línea base
+léxica y el recall híbrido.

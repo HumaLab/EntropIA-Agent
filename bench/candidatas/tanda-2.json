@@ -1,0 +1,326 @@
+{
+  "banco_destino": "entropia-bench-v1",
+  "tanda": 2,
+  "protocolo": "screening + filtro (difícil para la búsqueda léxica) + revisión del historiador (aprobada el 2026-09-13)",
+  "candidatas": [
+    {
+      "id": "cand-011",
+      "nivel": 2,
+      "tipo": "condiciones_trabajo",
+      "pregunta": "A fines de la década de 1930, ¿en qué condiciones trabajaban las obreras de las fábricas de conservas de pescado, según una nota que las exhortaba a organizarse?",
+      "items_esperados": [
+        "be1f54d0-a983-4df4-b0cc-083e4273f953"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-f16709171a5108a12c3993d68fc26e377973f29d260100aa5e326e3a2757f37c",
+        "ragchk-80262177734c21c66d6936dd81c7af0fd7d6bbb49992ae6f3b660ea2495603c8"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-f16709171a5108a12c3993d68fc26e377973f29d260100aa5e326e3a2757f37c"
+        ],
+        [
+          "ragchk-80262177734c21c66d6936dd81c7af0fd7d6bbb49992ae6f3b660ea2495603c8"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos: la misma nota de prensa (1939) da en un fragmento los jornales de 1,80 a 3 pesos por jornadas extenuantes en lugares húmedos y antihigiénicos, sin zuecos, y en otro el trabajo nocturno impuesto a las obreras. Ningún otro documento del corpus describe esas condiciones para ese período (los testimonios de Voces hablan de décadas posteriores).",
+      "respuesta_referencia": "Jornales de entre 1,80 y 3 pesos por jornadas extenuantes, en lugares húmedos y antihigiénicos, sin que se les diera siquiera un par de zuecos; además se las obligaba al trabajo nocturno. Era un gremio de mujeres y menores, desorganizado y sin que las autoridades hicieran cumplir las leyes.",
+      "coleccion": "SOIP 1930",
+      "fragmento": "Los salarios que varían entre la ínfima suma de 1.80 y 3 pesos por jornadas extenuantes, cumplidas en la mayoría de los casos en lugares húmedos y antihigiénicos, sin que a los trabajadores se les proporcionen por lo menos un miserable par de zuecos",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-012",
+      "nivel": 2,
+      "tipo": "interpretacion",
+      "pregunta": "Frente a una nota periodística que culpaba a extraños al gremio por el cese de actividades de una planta conservera a mediados de los años treinta, ¿cómo lo explicó la organización obrera?",
+      "items_esperados": [
+        "69cf592e-d164-4d12-9bbd-770c4571c008"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-d41ae909e08c3ba756194ecdbf9ac845dd5e1f821d6d473270e1456d27da7493",
+        "ragchk-4948d140b70af09adda3518903a3042d4071b366a4a1b243717bd62d5cc7e1b0"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-d41ae909e08c3ba756194ecdbf9ac845dd5e1f821d6d473270e1456d27da7493",
+          "ragchk-4948d140b70af09adda3518903a3042d4071b366a4a1b243717bd62d5cc7e1b0"
+        ]
+      ],
+      "grupos_justificacion": "Un grupo: dos fragmentos consecutivos de la misma nota sindical (1935) dicen cada uno que fueron los propios obreros y obreras quienes pararon la fábrica mientras los dueños no firmaran el pliego de condiciones; el primero agrega los piquetes contra rompehuelgas y el segundo que después también los patrones se comprometieron a no abrir.",
+      "respuesta_referencia": "Que no hubo personas ajenas: fueron los propios obreros y obreras de la fábrica los que pararon hasta que los propietarios firmaran el pliego de condiciones presentado por el sindicato, y los piquetes eran de ellos mismos con compañeros del gremio, para impedir la entrada de rompehuelgas; después los propios patrones se comprometieron a no trabajar hasta firmarlo.",
+      "coleccion": "SOIP 1930",
+      "fragmento": "ello se debe a que los mismos obreros y obreras de la citada fábrica, paralizaron las tareas hasta tanto los propietarios no firmen el pliego de condiciones pasado por este sindicato.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-013",
+      "nivel": 2,
+      "tipo": "posiciones",
+      "pregunta": "Durante la huelga de los fileteros de 1965, ¿de qué acusó la central de los sindicatos autónomos a la CGT local y qué aconsejó a los trabajadores?",
+      "items_esperados": [
+        "fb107548-d1fb-4102-af28-a47b2a5357a8",
+        "30b1e9a1-33f9-465c-8552-a24a63dcad78"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-20cffaa4cfdb0b3b459fa7de7cca6efd2f28ef73419e6e43f87ccd858a6d1cf2",
+        "ragchk-1e0cc538f339b09db303dccc9937ef65f4b24812f4e609d735269079bb3c9edb",
+        "ragchk-1fb3afc6c3fbd2686c73a74c0f848571056e07a5eaf66ae0124be424e176746c"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-20cffaa4cfdb0b3b459fa7de7cca6efd2f28ef73419e6e43f87ccd858a6d1cf2"
+        ],
+        [
+          "ragchk-1e0cc538f339b09db303dccc9937ef65f4b24812f4e609d735269079bb3c9edb",
+          "ragchk-1fb3afc6c3fbd2686c73a74c0f848571056e07a5eaf66ae0124be424e176746c"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos: la acusación de «instigación violenta» está solo en el comunicado de la UOL (65-04-12-a); el consejo de seguir trabajando está en la continuación de ese comunicado («no dejarse intimidar, manteniéndose en sus lugares de trabajo») y, por separado, en las resoluciones de la UOL que transcribe la nota del día siguiente («aconsejar a los trabajadores mantener en sus tareas habituales»).",
+      "respuesta_referencia": "La acusó de «instigación violenta» en el conflicto; resolvió oponerse a cualquier paro decretado por el grupo instigador de la CGT y aconsejó a los trabajadores de todos los gremios no dejarse intimidar y mantenerse en sus lugares de trabajo.",
+      "coleccion": "Conflicto SOIP 1965-66",
+      "fragmento": "denuncia a la Confederación General de Trabajo, seccional Mar del Plata de \"instigación violenta\" en el conflicto que mantiene paralizada la actividad de los obreros fileteros.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-014",
+      "nivel": 1,
+      "tipo": "contenido",
+      "pregunta": "¿Qué reclamo hizo la central obrera a las autoridades municipales por el modo en que los obreros del pescado viajaban a sus empleos al amanecer?",
+      "items_esperados": [
+        "83b7bc3e-8ace-44d6-bff8-c1efe838aefb"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-c53b18d83a931076c5fef11634454b4dcd604695d048838e0b0b0a9f3501bf42"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-c53b18d83a931076c5fef11634454b4dcd604695d048838e0b0b0a9f3501bf42"
+        ]
+      ],
+      "grupos_justificacion": "Un grupo: solo el fragmento central de la nota de la CGT sobre la reestructuración del transporte dice que en la madrugada el personal de la industria del pescado no tiene servicios que lleguen a la zona portuaria; el comienzo de la nota habla de los trabajadores en general.",
+      "respuesta_referencia": "Que con la reestructuración del transporte las líneas ya no llegaban a la zona portuaria en la madrugada, de modo que el personal de la industria del pescado no podía trasladarse a su trabajo; además muchos debían tomar dos líneas y los coches pasaban cada diez o quince minutos en lugar de cada cinco. Pedía una solución rápida.",
+      "coleccion": "Conflicto SOIP 1965-66",
+      "fragmento": "en las horas de la madrugada, el personal de la Industria del Pescado y otros gremios se trasladan a los lugares de trabajo, se ven imposibilitados de hacerlo, pues las empresas a esas horas, no cuentan con servicios",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-015",
+      "nivel": 2,
+      "tipo": "causas",
+      "pregunta": "¿Por qué uno de los dos sindicatos que se disputaban la representación de los albañiles marplatenses quedó excluido de las negociaciones salariales con los empresarios?",
+      "items_esperados": [
+        "ef6fa340-54db-480d-af5d-37e23dbf6d80"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-552bac8ba45d6f13e697d4a2c2b6cff37463ff8bd4e983f12e92ea40d01c3033",
+        "ragchk-2e077b082f903e97f883e9e3942e6dca414a9441b01745a245265000412b4e03"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-552bac8ba45d6f13e697d4a2c2b6cff37463ff8bd4e983f12e92ea40d01c3033",
+          "ragchk-2e077b082f903e97f883e9e3942e6dca414a9441b01745a245265000412b4e03"
+        ]
+      ],
+      "grupos_justificacion": "Un grupo: dos fragmentos consecutivos de la misma nota; uno dice que el Sindicato Obrero de la Construcción no participa por carecer de representatividad, el otro que la circular reconoce a la organización con personería y que en la ciudad la tiene la Unión Obrera de la Construcción. No se incluyen los chunks sobre la expulsión de sus delegados del plenario de la CGT (278c8cd…, c737a4a…, 5366ae4…): hablan de otra exclusión.",
+      "respuesta_referencia": "Porque carecía de representatividad según una disposición general de la Subsecretaría de Trabajo de la provincia: solo la Unión Obrera de la Construcción tenía personería gremial conforme a la Ley de Asociaciones Profesionales, y fue ella la que negoció con los constructores.",
+      "coleccion": "SOIP 1961",
+      "fragmento": "de las negociaciones de referencia no participa el Sindicato Obrero de la Construcción, en razón de carecer de representatividad, según una disposición general de la Dirección Ejecutiva de la Subsecretaría de Trabajo de la provincia de Buenos Aires.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-016",
+      "nivel": 1,
+      "tipo": "contenido",
+      "pregunta": "Cuando el gremio conservero dejó de parar en apoyo de la rama del filete, ¿qué acuerdo alcanzó con algunos empresarios?",
+      "items_esperados": [
+        "72d16f53-73e2-492e-98c9-ed469e7d9ee5"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-6c6f7efaba6e753ba38cb5c56b72cc7cb5a4b996463f1aa140d7fbbc0510865e",
+        "ragchk-0ab8b17396400d4497784a1507f63e13cce7b1e0a5a37d611a984dde1154d630",
+        "ragchk-9ff23d1d313c6491a520947ed6320d0285e4da2af61d7f87551fbea7c3ea6dcc"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-6c6f7efaba6e753ba38cb5c56b72cc7cb5a4b996463f1aa140d7fbbc0510865e",
+          "ragchk-0ab8b17396400d4497784a1507f63e13cce7b1e0a5a37d611a984dde1154d630",
+          "ragchk-9ff23d1d313c6491a520947ed6320d0285e4da2af61d7f87551fbea7c3ea6dcc"
+        ]
+      ],
+      "grupos_justificacion": "Un grupo: tres fragmentos consecutivos de la misma nota, cada uno con el acuerdo completo (trabajo solo en Fabripez, con la labor y los pagos controlados por el sindicato, que designa a los huelguistas). Es la reserva de la tanda 1 reformulada sin nombres.",
+      "respuesta_referencia": "Por resolución de varios empresarios, el sindicato controlaría la producción de filet y los pagos: los fileteros en huelga trabajarían únicamente en la fábrica Fabripez, designados por la propia organización sindical, hasta que se solucionara el conflicto.",
+      "coleccion": "SOIP 1961",
+      "fragmento": "por resolución de varios empresarios controlará la producción de filet y los respectivos pagos Quiere decir que el conflicto de los fileteros —que hoy entra en su décimo día— basido parcializado. El trabajo se llevará a cabo en la fabrica \"Fabripez\", unicamente.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-017",
+      "nivel": 1,
+      "tipo": "propuestas",
+      "pregunta": "¿Qué propuso en 1947 la central obrera autónoma marplatense a sus sindicatos para enfrentar el avance del sindicalismo oficial?",
+      "items_esperados": [
+        "d9f858c1-ac18-4ec7-8226-14c57312c76e"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-9ca187e1b712ac4519fd76c6caff4df56ac738df7ad66563b2313ba19bdf77b8",
+        "ragchk-93a714d7301a359285fb76ae87b6adec2c2fc1244de5948e3b0c580928cfe2bf"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-9ca187e1b712ac4519fd76c6caff4df56ac738df7ad66563b2313ba19bdf77b8",
+          "ragchk-93a714d7301a359285fb76ae87b6adec2c2fc1244de5948e3b0c580928cfe2bf"
+        ]
+      ],
+      "grupos_justificacion": "Un grupo: la propuesta del Congreso Nacional de la Resistencia aparece al final de un fragmento (cortada en «Resistenc») y se repite por solapamiento al comienzo del siguiente, que da además su propósito.",
+      "respuesta_referencia": "Un Congreso Nacional de la Resistencia, al que se invitaría a todos los sindicatos independientes, para organizar la defensa y la lucha por la independencia y la autodeterminación de los sindicatos obreros frente a la CGT oficialista.",
+      "coleccion": "Volantes, Panfletos, etc.",
+      "fragmento": "propone a los Sindicatos adheridos, la realización de un Congreso Nacional de la Resistencia, al que serían invitados todos los Sindicatos independientes, con el propósito de organizar la defensa y la lucha por la conquista y mantenimiento de la independencia",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-018",
+      "nivel": 2,
+      "tipo": "posiciones",
+      "pregunta": "¿Qué actitud adoptó en 1955 la federación marplatense de gremios independientes hacia la central obrera oficial, y era su independencia un objetivo permanente?",
+      "items_esperados": [
+        "e4a72d78-3fc2-4af7-94be-dc174d95d611"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-c3af4de7773f3c8256af448c2a22dc735e638352151d094aa60a8734be137768",
+        "ragchk-4bbf7fac2528308a221644c7682c015c0078f5082fd57cc8c92d8ce576ddff6a"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-c3af4de7773f3c8256af448c2a22dc735e638352151d094aa60a8734be137768"
+        ],
+        [
+          "ragchk-4bbf7fac2528308a221644c7682c015c0078f5082fd57cc8c92d8ce576ddff6a"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos, fragmentos consecutivos de la declaración de la UOL del 1º de noviembre de 1955: uno da el «absoluto desconocimiento» de la CGT (el OCR la transcribe «O.G.T.») y el otro que la autonomía es una fórmula transitoria y no un fin en sí misma.",
+      "respuesta_referencia": "Su primera medida fue el absoluto desconocimiento de la CGT, a la que consideraba instrumento de la dictadura; proclamó la autonomía de los sindicatos solo como fórmula transitoria para depurar el movimiento obrero, no como un fin en sí misma.",
+      "coleccion": "Volantes, Panfletos, etc.",
+      "fragmento": "la Unión Obrera Local proclama la autonomía de los sindicatos como fórmula transitoria para la depuración y saneamiento del movimiento obre ro, pero no la autonomía como un fin en si misma.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-019",
+      "nivel": 3,
+      "tipo": "atribucion",
+      "pregunta": "Después de 1955, ¿qué entidad obrera firmó el convenio colectivo en nombre del gremio del pescado, y qué la habilitaba a hacerlo?",
+      "items_esperados": [
+        "1c794f88-902c-42eb-817a-7b072443090a",
+        "108463d1-ab25-4541-ade2-aad418db7246"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-c6b50a840aa8e761a702cc5517ff75b57b5ca634ae107e2a17d8e2ab846aea62",
+        "ragchk-a3b41811feacf0eb9a125dd19ef9242b139d22dd443fb79edd44afc40a7eb158",
+        "ragchk-6717147cdad53b675b9246957836f34584c2b49a12ad4dd20b5a0c12200a1006"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-c6b50a840aa8e761a702cc5517ff75b57b5ca634ae107e2a17d8e2ab846aea62",
+          "ragchk-a3b41811feacf0eb9a125dd19ef9242b139d22dd443fb79edd44afc40a7eb158",
+          "ragchk-6717147cdad53b675b9246957836f34584c2b49a12ad4dd20b5a0c12200a1006"
+        ],
+        [
+          "ragchk-c6b50a840aa8e761a702cc5517ff75b57b5ca634ae107e2a17d8e2ab846aea62"
+        ]
+      ],
+      "grupos_justificacion": "Dos piezas de dos documentos: la entidad (la UOL) la dan la resolución ministerial 114 de 1956 (considerando y resolutivo) y el boletín de la Peña de Estudios Sindicales («contrato colectivo, con intervención de la U.O.L.»); la habilitación (disposición 11/56) solo el considerando de la resolución, que por eso está en los dos grupos.",
+      "respuesta_referencia": "La Unión Obrera Local (Sindicatos Autónomos) de Mar del Plata, por el Sindicato Obrero de la Industria del Pescado, con la Cámara Industrial del Pescado; la habilitaba la disposición nº 11/56 D.N.T.A.S.D., que le permitía actuar en convenciones colectivas en representación de los sindicatos que la integraban (el convenio se homologó por la Resolución 114 del 9 de octubre de 1956).",
+      "coleccion": "Resoluciones SOIP; Volantes, Panfletos, etc.",
+      "fragmento": "VISTO la disposición nº 11/56/D.N.T.A.S.D., por la cual se establece que la Unión Obrera Local (Sindicatos Autónomos) de la Ciudad de Mar del Plata (Pcia. de Buenos Aires) puede actuar en materia de convenciones colectivas representando a las entidades profesionales obreras integrantes de la misma",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-020",
+      "nivel": 3,
+      "tipo": "condiciones_trabajo",
+      "pregunta": "Según el testimonio de una ex obrera conservera, ¿qué equipo debía usar para trabajar en las máquinas, por qué, y quién lo pagaba?",
+      "items_esperados": [
+        "b42037d0-24ba-499d-913b-4d2f51380b98"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a",
+        "ragchk-8b643ab60d52757aaf422dd45677390f8f02770fa2191397c223aa5632f6c5e3",
+        "ragchk-bc7009bc0fd968f1409b97d434ba97c85f2d6334ac3040e4265d14386e59210b",
+        "ragchk-bc72b9606d6adb84adefe6dd7df0c68eb946a3775c70b4649dc2edc07e4d4dce"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a",
+          "ragchk-8b643ab60d52757aaf422dd45677390f8f02770fa2191397c223aa5632f6c5e3"
+        ],
+        [
+          "ragchk-bc7009bc0fd968f1409b97d434ba97c85f2d6334ac3040e4265d14386e59210b",
+          "ragchk-bc72b9606d6adb84adefe6dd7df0c68eb946a3775c70b4649dc2edc07e4d4dce"
+        ],
+        [
+          "ragchk-cf96de2a0d155872535abb99bd8aea1d6371572dc60d3066170687b0b689c81a"
+        ]
+      ],
+      "grupos_justificacion": "Tres piezas del mismo testimonio (Voces, «Elba 2»): el delantal encerado hasta los pies y las botas (dos pasajes distintos de la entrevista); la razón, el agua de las máquinas que salpicaba y mojaba todo (dos fragmentos solapados); y que la fábrica lo daba pero lo descontaba de la quincena (solo el primer pasaje, que por eso está en dos grupos).",
+      "respuesta_referencia": "Un delantal encerado largo hasta los pies, puesto sobre el uniforme, y botas (fuera de las máquinas se usaban zuecos de madera), porque el agua de las máquinas salpicaba y mojaba todo; la fábrica lo entregaba pero se lo descontaba de la quincena.",
+      "coleccion": "Voces",
+      "fragmento": "Ahora para las máquinas, un delantal encerado arriba de todo eso, largo hasta los pies y botas.\nHablante 1: ¿Y eso se los daba la fábrica o lo tenían que llevar ustedes?\nHablante 2: Lo daban pero te lo descontaban, muy poquito te lo descontaban, en la quincena",
+      "lexico_top16": 0.0
+    }
+  ],
+  "descartadas": [
+    {
+      "pregunta": "¿Qué abusos de la fuerza pública denunció en 1936 el gremio de la conserva marplatense contra sus reuniones y su sede?",
+      "motivo": "RESERVA (pasa el filtro, léxico 0/2), fuera por cupo de SOIP 1930: disolución violenta de una reunión con mujeres golpeadas y el allanamiento y saqueo del local de San Luis 3070 con detenidos; chunks ragchk-826ff670…, ragchk-6b14f806… / ragchk-b7f575a1…, ragchk-a47acf2a… (SOIP 1930)."
+    },
+    {
+      "pregunta": "¿A quiénes responsabilizaban los industriales conserveros de entorpecer la provisión de pescado en 1940, y de qué los acusaban?",
+      "motivo": "RESERVA (pasa el filtro, léxico 0), fuera por cupo: se ancla en el mismo telegrama que soip-019 (ragchk-d2e2f25d…, ragchk-f81ec900…)."
+    },
+    {
+      "pregunta": "¿Qué causó la caída mortal de dos trabajadores de una obra en altura, según la crónica gremial de comienzos de los años sesenta?",
+      "motivo": "La resuelve la búsqueda léxica (chunk esperado en el puesto 6 del top 16) y la fecha de la nota no consta en el texto."
+    },
+    {
+      "pregunta": "¿Qué denunció en 1956 un boletín obrero autónomo sobre las visitas que recibían los empresarios conserveros?",
+      "motivo": "La resuelve la búsqueda léxica (puesto 7) y la respuesta («la maffia» que cobraba cotizaciones) depende de un solo fragmento cortado."
+    },
+    {
+      "pregunta": "¿Qué cambió para las trabajadoras menores de las conserveras cuando entraron en vigencia las leyes de protección de menores?",
+      "motivo": "Referencia ambigua: el testimonio da «3 horas a la mañana, 3 horas a la tarde» y otro pasaje «empezamos a hacer 6 horas», sin fecha verificable."
+    },
+    {
+      "pregunta": "¿Desde cuándo existía la Sociedad de Obreros Sastres, Costureras y Anexos de Mar del Plata? (reserva de la tanda 1)",
+      "motivo": "No encaja en el perfil difícil: el nombre de la entidad y la fecha son términos distintivos que la búsqueda léxica encuentra."
+    },
+    {
+      "pregunta": "¿A quiénes detuvo la policía tras la clausura de la Casa del Pueblo en diciembre de 1947? (reserva de la tanda 1)",
+      "motivo": "No encaja en el perfil difícil: «Casa del Pueblo», «clausura» y «1947» anclan la búsqueda léxica; reformularla sin ellos la vuelve ambigua."
+    },
+    {
+      "pregunta": "¿Cuándo y entre quiénes se celebró el convenio colectivo del fileteado de pescado vigente durante el conflicto de 1965? (reserva de la tanda 1)",
+      "motivo": "No encaja en el perfil difícil: la respuesta es una fecha y dos razones sociales, términos que la búsqueda léxica encuentra."
+    },
+    {
+      "pregunta": "¿Qué jornales pedía el Sindicato Obrero de la Industria de la Construcción para el oficial, el medio oficial y el ayudante? (reserva de la tanda 1)",
+      "motivo": "No encaja en el perfil difícil: pregunta por cifras con vocabulario literal del chunk."
+    }
+  ],
+  "estado": "aprobada por el historiador el 2026-09-13",
+  "ids_finales": {
+    "cand-011": "soip-023",
+    "cand-012": "soip-024",
+    "cand-013": "soip-025",
+    "cand-014": "soip-026",
+    "cand-015": "soip-027",
+    "cand-016": "soip-028",
+    "cand-017": "soip-029",
+    "cand-018": "soip-030",
+    "cand-019": "soip-031",
+    "cand-020": "soip-032"
+  },
+  "soip_006": {
+    "reformulada": true,
+    "motivo": "fts5_query usa solo 12 tokens y el preámbulo con el título del ítem los consumía; el chunk esperado no aparecía ni con límite 400"
+  }
+}
