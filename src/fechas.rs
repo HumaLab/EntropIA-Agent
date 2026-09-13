@@ -48,14 +48,35 @@ pub struct Fecha {
 }
 
 impl Fecha {
-    /// Representación ISO `YYYY-MM-DD` (con `00` en los campos ausentes).
+    /// Representación ISO de precisión reducida: `YYYY`, `YYYY-MM` o
+    /// `YYYY-MM-DD` según hasta dónde llegue la fecha.
+    ///
+    /// Rellenar con `00` los campos ausentes producía texto que ningún parser
+    /// acepta («1965-00-00») y que además no ordena. El texto es para leer: lo
+    /// que se ordena y se filtra son el año, el mes y el día por separado.
     pub fn iso(&self) -> String {
-        format!(
-            "{:04}-{:02}-{:02}",
-            self.anio,
-            self.mes.unwrap_or(0),
-            self.dia.unwrap_or(0)
-        )
+        match (self.mes, self.dia) {
+            (Some(mes), Some(dia)) => format!("{:04}-{:02}-{:02}", self.anio, mes, dia),
+            (Some(mes), _) => format!("{:04}-{mes:02}", self.anio),
+            _ => format!("{:04}", self.anio),
+        }
+    }
+
+    /// La misma fecha recortada a lo que la precisión sostiene.
+    pub fn recortada(&self, p: Precision) -> Fecha {
+        match p {
+            Precision::Dia => self.clone(),
+            Precision::Mes => Fecha {
+                anio: self.anio,
+                mes: self.mes,
+                dia: None,
+            },
+            _ => Fecha {
+                anio: self.anio,
+                mes: None,
+                dia: None,
+            },
+        }
     }
 }
 
@@ -496,7 +517,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(c.fecha.unwrap().iso(), "1948-00-00");
+        assert_eq!(c.fecha.unwrap().iso(), "1948");
         assert_eq!(c.precision, Precision::Anio);
     }
 
@@ -514,7 +535,7 @@ mod tests {
 
                 let titulo = format!("{prefijo} - enero 1948");
                 let c = fecha_desde_titulo(&titulo, "").unwrap();
-                assert_eq!(c.fecha.unwrap().iso(), "1948-00-00");
+                assert_eq!(c.fecha.unwrap().iso(), "1948");
                 assert_eq!(c.precision, Precision::Anio);
             }
         }
@@ -528,7 +549,7 @@ mod tests {
             Some("Archivo/Represión obrera/enero 1948"),
         )
         .unwrap();
-        assert_eq!(c.fecha.unwrap().iso(), "1948-00-00");
+        assert_eq!(c.fecha.unwrap().iso(), "1948");
         assert_eq!(c.precision, Precision::Anio);
         assert_eq!(c.source, "original_path");
     }

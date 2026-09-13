@@ -14,7 +14,7 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 /// Versión de esquema actual del estado del agente.
-pub const VERSION_ESQUEMA: i64 = 5;
+pub const VERSION_ESQUEMA: i64 = 6;
 
 /// Migraciones incrementales: índice i → versión i+1.
 ///
@@ -273,6 +273,42 @@ ALTER TABLE artifacts ADD COLUMN content_json TEXT;
 ALTER TABLE artifacts ADD COLUMN obsolete INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE human_decisions ADD COLUMN obsolete INTEGER NOT NULL DEFAULT 0;
 "#,
+    // Migración 6 — Fase 2 (PLAN §6.5): la fecha del documento se guarda como
+    // lo que es, un año seguro con mes y día opcionales. `1965-00-00` no es una
+    // fecha: ningún parser la acepta y no ordena. Las columnas son la forma
+    // legible por máquina (filtrar y ordenar van por ellas); `date` queda como
+    // texto derivado en ISO de precisión reducida («1965», «1965-03»). El
+    // relleno lee el texto viejo: año si los primeros cuatro caracteres son
+    // dígitos, mes y día solo cuando no son `00`.
+    r#"
+ALTER TABLE source_temporal_metadata ADD COLUMN year INTEGER;
+ALTER TABLE source_temporal_metadata ADD COLUMN month INTEGER;
+ALTER TABLE source_temporal_metadata ADD COLUMN day INTEGER;
+
+UPDATE source_temporal_metadata
+   SET year = CAST(substr(date, 1, 4) AS INTEGER)
+ WHERE date IS NOT NULL AND substr(date, 1, 4) GLOB '[0-9][0-9][0-9][0-9]';
+
+UPDATE source_temporal_metadata
+   SET month = CAST(substr(date, 6, 2) AS INTEGER)
+ WHERE year IS NOT NULL
+   AND substr(date, 6, 2) GLOB '[0-9][0-9]'
+   AND substr(date, 6, 2) <> '00';
+
+UPDATE source_temporal_metadata
+   SET day = CAST(substr(date, 9, 2) AS INTEGER)
+ WHERE month IS NOT NULL
+   AND substr(date, 9, 2) GLOB '[0-9][0-9]'
+   AND substr(date, 9, 2) <> '00';
+
+UPDATE source_temporal_metadata
+   SET date = CASE
+                WHEN day IS NOT NULL THEN printf('%04d-%02d-%02d', year, month, day)
+                WHEN month IS NOT NULL THEN printf('%04d-%02d', year, month)
+                ELSE printf('%04d', year)
+              END
+ WHERE year IS NOT NULL;
+"#,
 ];
 
 /// Base de estado del agente (escritura).
@@ -481,6 +517,86 @@ mod tests {
         }
         // source_versions nace en la migración 3 (Fase 3, Modo 2).
         assert!(tablas.contains(&"source_versions".to_string()));
+    }
+
+    #[test]
+    fn la_migracion_temporal_completa_anio_mes_y_dia_desde_la_fecha_de_texto() {
+        // Base escrita con el esquema anterior: la fecha vivía solo como texto,
+        // con `00` en los campos que el documento no sostiene.
+        let path = std::env::temp_dir().join(format!(
+            "entropia-estado-temporal-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+            for (i, sql) in MIGRACIONES.iter().enumerate().take(MIGRACIONES.len() - 1) {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![i as i64 + 1, ahora()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sources (id, kind, project, corpus, created_at) \
+                 VALUES ('src-1', 'entropia_chunk', 'proyecto', 'corpus', 1)",
+                [],
+            )
+            .unwrap();
+            for (id, fecha) in [
+                ("tmp-anio", Some("1948-00-00")),
+                ("tmp-mes", Some("1965-03-00")),
+                ("tmp-dia", Some("1965-03-17")),
+                ("tmp-nula", None),
+            ] {
+                conn.execute(
+                    "INSERT INTO source_temporal_metadata (id, source_id, date, precision, \
+                     confidence, derivation) VALUES (?1, 'src-1', ?2, 'year', 0.5, 'titulo')",
+                    params![id, fecha],
+                )
+                .unwrap();
+            }
+        }
+
+        let db = EstadoDb::abrir(path.to_str().unwrap()).unwrap();
+        let leer = |id: &str| -> (Option<i64>, Option<i64>, Option<i64>) {
+            db.conn()
+                .query_row(
+                    "SELECT year, month, day FROM source_temporal_metadata WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(leer("tmp-anio"), (Some(1948), None, None));
+        assert_eq!(leer("tmp-mes"), (Some(1965), Some(3), None));
+        assert_eq!(leer("tmp-dia"), (Some(1965), Some(3), Some(17)));
+        assert_eq!(leer("tmp-nula"), (None, None, None));
+
+        // Y las columnas ordenan cronológicamente, que es lo que el texto con
+        // `00` no permitía.
+        let orden: Vec<String> = db
+            .conn()
+            .prepare(
+                "SELECT id FROM source_temporal_metadata WHERE year IS NOT NULL \
+                 ORDER BY year, month, day",
+            )
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(orden, vec!["tmp-anio", "tmp-mes", "tmp-dia"]);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

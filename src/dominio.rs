@@ -705,10 +705,15 @@ impl<'a> Ledger<'a> {
     // ── temporal + memoria ────────────────────────────────────────────────
 
     /// Registra un candidato de `document_date` para una fuente (PLAN §6.5).
+    ///
+    /// La fecha entra estructurada: el año va a `year` y el mes y el día a
+    /// `month`/`day` solo cuando el documento los sostiene. Esas columnas son
+    /// la forma legible por máquina —ordenar y filtrar van por ellas—; `date`
+    /// es texto derivado, ISO de precisión reducida, para leer.
     pub fn registrar_metadata_temporal(
         &self,
         source_id: &str,
-        fecha: &str,
+        fecha: &crate::fechas::Fecha,
         precision: &str,
         confidence: f64,
         derivation: &str,
@@ -717,9 +722,20 @@ impl<'a> Ledger<'a> {
         self.db
             .conn()
             .execute(
-                "INSERT INTO source_temporal_metadata (id, source_id, date, precision, \
-                 confidence, derivation) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, source_id, fecha, precision, confidence, derivation],
+                "INSERT INTO source_temporal_metadata (id, source_id, date, year, month, day, \
+                 precision, confidence, derivation) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id,
+                    source_id,
+                    fecha.iso(),
+                    fecha.anio,
+                    fecha.mes,
+                    fecha.dia,
+                    precision,
+                    confidence,
+                    derivation
+                ],
             )
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -728,19 +744,31 @@ impl<'a> Ledger<'a> {
     /// Metadata temporal vigente de una fuente: fecha, precisión, confianza y
     /// de qué capa se derivó. Escribir una fecha que nadie puede leer es lo
     /// mismo que no tenerla.
+    ///
+    /// La fecha se arma desde las columnas; el texto guardado es el respaldo
+    /// para las filas que ninguna migración pudo interpretar.
     pub fn metadata_temporal(&self, source_id: &str) -> Option<(String, String, f64, String)> {
         self.db
             .conn()
             .query_row(
-                "SELECT date, precision, confidence, derivation FROM source_temporal_metadata \
+                "SELECT date, year, month, day, precision, confidence, derivation \
+                 FROM source_temporal_metadata \
                  WHERE source_id = ?1 ORDER BY rowid DESC LIMIT 1",
                 params![source_id],
                 |r| {
+                    let texto = r.get::<_, Option<String>>(0)?.unwrap_or_default();
+                    let anio = r.get::<_, Option<i64>>(1)?;
+                    let mes = r.get::<_, Option<i64>>(2)?;
+                    let dia = r.get::<_, Option<i64>>(3)?;
+                    let fecha = match anio {
+                        Some(anio) => crate::fechas::Fecha { anio, mes, dia }.iso(),
+                        None => texto,
+                    };
                     Ok((
-                        r.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                        r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                        r.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
-                        r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                        fecha,
+                        r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                        r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                        r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                     ))
                 },
             )
@@ -922,6 +950,49 @@ mod tests {
             .registrar_evidencia(&src, "17 de marzo", ini + 1, ini + 11, None, None)
             .unwrap_err();
         assert!(err.contains("span inválido"));
+    }
+
+    #[test]
+    fn la_metadata_temporal_guarda_anio_mes_y_dia_por_separado() {
+        let db = EstadoDb::abrir_en_memoria().unwrap();
+        let l = Ledger::nuevo(&db);
+        let src = l
+            .registrar_fuente(
+                ClaseFuente::EntropiaChunk,
+                Some("chunk-1"),
+                None,
+                None,
+                Some("chunk-1"),
+                None,
+                "p",
+                "c",
+            )
+            .unwrap();
+        let fecha = crate::fechas::Fecha {
+            anio: 1948,
+            mes: None,
+            dia: None,
+        };
+        l.registrar_metadata_temporal(&src, &fecha, "year", 0.5, "titulo:anio")
+            .unwrap();
+
+        // Las columnas son la forma legible por máquina: el mes y el día que el
+        // documento no sostiene quedan en NULL, no en `00`.
+        let columnas: (Option<i64>, Option<i64>, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT year, month, day FROM source_temporal_metadata WHERE source_id = ?1",
+                params![src],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(columnas, (Some(1948), None, None));
+
+        // Y el texto derivado no afirma más de lo que hay.
+        let (texto, precision, _, derivacion) = l.metadata_temporal(&src).unwrap();
+        assert_eq!(texto, "1948");
+        assert_eq!(precision, "year");
+        assert_eq!(derivacion, "titulo:anio");
     }
 
     #[test]

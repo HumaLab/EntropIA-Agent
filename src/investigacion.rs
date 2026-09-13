@@ -1961,10 +1961,17 @@ impl Engine<'_> {
                             // metadata determinista de la fuente, no salida del
                             // modelo, y viaja con su precisión y su confianza.
                             if let Some(fecha) = row["document_date"].as_object() {
-                                if let Some(iso) = fecha["iso"].as_str() {
+                                // Estructurada, no texto: el ledger guarda año,
+                                // mes y día por separado y deriva la forma
+                                // legible de ahí.
+                                if let Some(anio) = fecha["anio"].as_i64() {
                                     ledger.registrar_metadata_temporal(
                                         &f,
-                                        iso,
+                                        &crate::fechas::Fecha {
+                                            anio,
+                                            mes: fecha["mes"].as_i64(),
+                                            dia: fecha["dia"].as_i64(),
+                                        },
                                         fecha["precision"].as_str().unwrap_or("none"),
                                         fecha["confidence"].as_f64().unwrap_or(0.0),
                                         fecha["source"].as_str().unwrap_or("titulo"),
@@ -2468,6 +2475,9 @@ fn fecha_documento(titulo: &str, coleccion: &str) -> Value {
         Some(c) => match c.fecha {
             Some(f) => json!({
                 "iso": f.iso(),
+                "anio": f.anio,
+                "mes": f.mes,
+                "dia": f.dia,
                 "display": segun_precision(&f, c.precision),
                 "precision": c.precision.as_str(),
                 "confidence": c.confidence,
@@ -2481,11 +2491,7 @@ fn fecha_documento(titulo: &str, coleccion: &str) -> Value {
 
 /// Recorta la fecha a lo que la precisión sostiene.
 fn segun_precision(f: &crate::fechas::Fecha, p: crate::fechas::Precision) -> String {
-    match p {
-        crate::fechas::Precision::Dia => f.iso(),
-        crate::fechas::Precision::Mes => format!("{:04}-{:02}", f.anio, f.mes.unwrap_or(0)),
-        _ => format!("{:04}", f.anio),
-    }
+    f.recortada(p).iso()
 }
 
 fn cita(n: usize, row: &Value, collections: &Value, con_texto: bool) -> Citation {
