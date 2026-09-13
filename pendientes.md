@@ -12,7 +12,7 @@ trabajo de Fase 7 sin commitear.
 | 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | **Resuelto** con otro diseño (`bbc5457`, `a244f47`; UI en Pro-Lite `c7b59a3`) |
 | 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | Primera pasada en Lite hecha; faltan gates y Pro |
 | 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | En curso: banco de 32 (22 miden); profundidad 16, 24 por pierna y fusión (1,1) confirmadas con datos; falta crecer el banco y medir con las consultas del plan |
-| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | En curso: editar a mano y reescribir con indicación (spec `2fab365`) |
+| 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | **Resuelto** (A y B): motor `5d12fe3`, UI en Pro-Lite `0720e40`; la C (evidencia nueva) queda afuera |
 | 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | Abierto |
 | 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | **Resuelto**: palabras vacías y repetidos fuera antes del tope (léxica 0.48 → 0.68, híbrida 0.82 → 0.89) |
 | 8 | La fusión RRF desempata al azar | Defecto | Chico | **Resuelto**: orden total (puntaje, mejor puesto de pierna, id) y chunks cargados por id |
