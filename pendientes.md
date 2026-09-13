@@ -14,7 +14,7 @@ trabajo de Fase 7 sin commitear.
 | 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | En curso: medición arreglada; banco de 32 preguntas, 22 miden |
 | 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | Abierto (ya no depende de nada) |
 | 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | Abierto |
-| 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | Abierto (medible con el bench) |
+| 7 | La consulta léxica usa solo las primeras 12 palabras | Defecto | Chico | **Resuelto**: palabras vacías y repetidos fuera antes del tope (léxica 0.48 → 0.68, híbrida 0.82 → 0.89) |
 
 **Estado al 2026-09-11 (tarde).**
 - #1 y #2 están en `main` de los dos repos y publicados; el pin del motor en Pro-Lite apunta a

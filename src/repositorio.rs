@@ -407,16 +407,39 @@ ORDER BY items DESC"
 ///
 /// Fase 0 (PLAN §9): se conservan los tokens numéricos de 2 caracteres (p. ej.
 /// `65` y `17` en consultas por fecha `65-03-17`) que antes se descartaban.
+///
+/// Las palabras vacías se descartan antes del tope: si ocupan lugar, en una
+/// pregunta larga los términos que discriminan quedan afuera.
 pub fn fts5_query(texto: &str) -> String {
+    let texto = texto.to_lowercase();
+    let mut vistos = std::collections::HashSet::new();
     let tokens: Vec<String> = texto
-        .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| es_token_valido(t))
-        .take(12)
+        .filter(|t| es_token_valido(t) && !PALABRAS_VACIAS.contains(t) && vistos.insert(*t))
+        .take(MAX_TOKENS_FTS)
         .map(|t| format!("\"{}\"", t.replace('"', "")))
         .collect();
     tokens.join(" OR ")
 }
+
+/// Tope de términos de una consulta FTS5.
+const MAX_TOKENS_FTS: usize = 12;
+
+/// Palabras vacías del español de más de dos letras (las de una o dos ya las
+/// descarta `es_token_valido`), con y sin tilde, más los términos del propio
+/// sistema que las preguntas arrastran («ítem», «colección»).
+#[rustfmt::skip]
+const PALABRAS_VACIAS: &[&str] = &[
+    "qué", "que", "quién", "quien", "quiénes", "quienes", "cuál", "cual", "cuáles", "cuales",
+    "cuándo", "cuando", "cuánto", "cuanto", "cuántos", "cuantos", "cuánta", "cuanta", "cuántas",
+    "cuantas", "dónde", "donde", "cómo", "como", "los", "las", "del", "una", "uno", "unos", "unas",
+    "para", "por", "con", "sin", "según", "segun", "sobre", "entre", "desde", "hasta", "hacia",
+    "durante", "tras", "ante", "bajo", "contra", "este", "esta", "estos", "estas", "ese", "esa",
+    "esos", "esas", "aquel", "aquella", "aquellos", "aquellas", "sus", "les", "fue", "fueron",
+    "era", "eran", "ser", "son", "está", "están", "estan", "había", "habia", "hay",
+    "tenía", "tenia", "tenían", "tenian", "más", "mas", "muy", "pero", "sino", "también",
+    "tambien", "item", "ítem", "items", "ítems", "colección", "coleccion",
+];
 
 /// Un token es válido si tiene más de 2 caracteres, o si es numérico con al
 /// menos 2 (las fechas `65-03-17` no deben perderse en la consulta).
@@ -437,6 +460,25 @@ mod tests {
     #[test]
     fn fts5_ignora_tokens_cortos_alfabeticos() {
         assert_eq!(fts5_query("la de y huelga"), "\"huelga\"");
+    }
+
+    #[test]
+    fn fts5_descarta_las_palabras_vacias_de_la_pregunta() {
+        // Interrogativos, artículos y conectores no discriminan documentos:
+        // solo ocupan lugar en la consulta.
+        assert_eq!(
+            fts5_query("¿Qué reclamaban los obreros según una nota del diario?"),
+            "\"reclamaban\" OR \"obreros\" OR \"nota\" OR \"diario\""
+        );
+    }
+
+    #[test]
+    fn fts5_no_repite_terminos() {
+        // Un término repetido no suma cobertura: solo gastaría el tope.
+        assert_eq!(
+            fts5_query("65-03-03 huelga huelga"),
+            "\"65\" OR \"03\" OR \"huelga\""
+        );
     }
 
     #[test]
