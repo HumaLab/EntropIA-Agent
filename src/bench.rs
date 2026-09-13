@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::recuperacion::{Recuperador, RERANK_DEPTH};
+use crate::recuperacion::{rrf_fuse_ponderada, Recuperador, LEG_K, RERANK_DEPTH};
 
 /// Una pregunta del banco, anclada a evidencia procesada.
 #[derive(Debug, Clone, Deserialize)]
@@ -426,6 +426,206 @@ pub fn resumir_profundidad(
     }
 }
 
+/// Piernas de producción de una pregunta, en ids de chunk: la vectorial y la
+/// léxica tal como el flujo las fusiona (cortadas en `LEG_K`). Con ellas la
+/// fusión se reevalúa fuera de línea con otros pesos, sin llamar a la API.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PiernasPregunta {
+    pub pregunta_id: String,
+    pub vectorial: Vec<String>,
+    pub lexica: Vec<String>,
+    /// `None` cuando corrieron las dos piernas: sin la vectorial, pesarla no
+    /// mide nada.
+    pub degradacion: Option<String>,
+}
+
+/// Piernas de producción del banco, tal como las guarda el corredor pago en
+/// `bench/resultados/` y las lee el evaluador sin API. Declara con qué `LEG_K`
+/// y `RRF_K` se capturaron: con otros, la reevaluación no es la del flujo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchivoPiernas {
+    pub banco: String,
+    pub leg_k: usize,
+    pub rrf_k: usize,
+    /// Colecciones consultadas: «seleccionar todo» menos la denylist.
+    pub alcance: Vec<String>,
+    pub piernas: Vec<PiernasPregunta>,
+}
+
+/// Captura las piernas de producción de una pregunta, en el mismo alcance que
+/// `evaluar` («seleccionar todo» menos la denylist). Una llamada de
+/// embeddings, ninguna de rerank.
+///
+/// A profundidad `LEG_K` las piernas del diagnóstico son exactamente las del
+/// flujo: la vectorial cortada en `LEG_K` y la léxica sacada de los primeros
+/// `LEG_K * 8` resultados de FTS5, filtrados al alcance y cortados en `LEG_K`.
+///
+/// `None` si la pregunta no declara evidencia: no se paga una llamada de
+/// embeddings por una pregunta que no se puede evaluar.
+pub fn capturar_piernas(
+    repo: &crate::repositorio::RepositorioSqlite,
+    recuperador: &Recuperador,
+    pregunta: &PreguntaBench,
+) -> Option<PiernasPregunta> {
+    if pregunta.grupos_evidencia().is_empty() {
+        return None;
+    }
+    let alcance = alcance_seleccionar_todo(repo);
+    let ranking = recuperador.ranking_diagnostico(repo, &pregunta.pregunta, &alcance, LEG_K);
+    Some(PiernasPregunta {
+        pregunta_id: pregunta.id.clone(),
+        vectorial: ranking.vectorial,
+        lexica: ranking.lexica,
+        degradacion: ranking.degradacion,
+    })
+}
+
+/// Subconjunto de preguntas con promedio propio (por ejemplo, las fáciles y
+/// las difíciles del banco).
+#[derive(Debug, Clone, Serialize)]
+pub struct Subconjunto {
+    pub nombre: String,
+    pub preguntas: Vec<String>,
+}
+
+/// Recall medio de un subconjunto con un par de pesos.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecallSubconjunto {
+    pub nombre: String,
+    pub recall: Agregado,
+}
+
+/// Recall medio de la fusión con un par de pesos.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FusionPonderada {
+    pub peso_vectorial: f64,
+    pub peso_lexico: f64,
+    /// Sobre todas las preguntas evaluadas.
+    pub recall: Agregado,
+    /// Uno por subconjunto, en el orden pedido.
+    pub subconjuntos: Vec<RecallSubconjunto>,
+}
+
+/// Recall de una pregunta con cada par de pesos, en el orden en que se
+/// pidieron: así se ven las ganancias y las pérdidas pregunta por pregunta.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecallPorPesos {
+    pub pregunta_id: String,
+    pub recall: Vec<Option<f64>>,
+}
+
+/// Evaluación fuera de línea de fusiones ponderadas a una profundidad `k`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EvaluacionFusion {
+    pub k: usize,
+    pub pesos: Vec<FusionPonderada>,
+    pub preguntas: Vec<RecallPorPesos>,
+}
+
+/// Reevalúa, sin API, la fusión de las piernas capturadas con cada par de
+/// pesos `(vectorial, léxico)`: recall de grupos de evidencia en los primeros
+/// `k`, por pregunta, en promedio y por subconjunto.
+///
+/// Una pregunta que no está en el banco o no declara evidencia entra con
+/// recall `None`: cuenta en el total pero no en el promedio.
+pub fn evaluar_fusiones(
+    banco: &BancoBench,
+    piernas: &[PiernasPregunta],
+    pesos: &[(f64, f64)],
+    subconjuntos: &[Subconjunto],
+    k: usize,
+) -> EvaluacionFusion {
+    let preguntas: Vec<RecallPorPesos> = piernas
+        .iter()
+        .map(|p| {
+            let grupos = banco
+                .preguntas
+                .iter()
+                .find(|q| q.id == p.pregunta_id)
+                .map(PreguntaBench::grupos_evidencia)
+                .unwrap_or_default();
+            RecallPorPesos {
+                pregunta_id: p.pregunta_id.clone(),
+                recall: pesos
+                    .iter()
+                    .map(|&(pv, pl)| recall(&grupos, &fusion_ponderada(p, pv, pl, k)))
+                    .collect(),
+            }
+        })
+        .collect();
+    let fusiones = pesos
+        .iter()
+        .enumerate()
+        .map(|(i, &(peso_vectorial, peso_lexico))| FusionPonderada {
+            peso_vectorial,
+            peso_lexico,
+            recall: agregar(preguntas.iter().map(|p| p.recall[i])),
+            subconjuntos: subconjuntos
+                .iter()
+                .map(|s| RecallSubconjunto {
+                    nombre: s.nombre.clone(),
+                    recall: agregar(
+                        preguntas
+                            .iter()
+                            .filter(|p| s.preguntas.contains(&p.pregunta_id))
+                            .map(|p| p.recall[i]),
+                    ),
+                })
+                .collect(),
+        })
+        .collect();
+    EvaluacionFusion {
+        k,
+        pesos: fusiones,
+        preguntas,
+    }
+}
+
+/// Fusión ponderada de las piernas de una pregunta, cortada en `k`, en ids.
+///
+/// Los índices salen de ordenar los ids: en el flujo el índice de un chunk
+/// sigue el orden por id con que `cargar_chunks` entrega el corpus, así que el
+/// desempate por índice queda igual al de producción.
+fn fusion_ponderada(
+    piernas: &PiernasPregunta,
+    peso_vectorial: f64,
+    peso_lexico: f64,
+    k: usize,
+) -> Vec<String> {
+    let mut ids: Vec<&String> = piernas.vectorial.iter().chain(&piernas.lexica).collect();
+    ids.sort();
+    ids.dedup();
+    let indices = |pierna: &[String]| -> Vec<usize> {
+        pierna
+            .iter()
+            .filter_map(|id| ids.binary_search(&id).ok())
+            .collect()
+    };
+    rrf_fuse_ponderada(
+        &indices(&piernas.vectorial),
+        &indices(&piernas.lexica),
+        peso_vectorial,
+        peso_lexico,
+    )
+    .into_iter()
+    .take(k)
+    .map(|(i, _)| ids[i].clone())
+    .collect()
+}
+
+/// Promedio de los valores que aplican (`Some`), con cuántos aplican y
+/// cuántos hay.
+fn agregar(valores: impl Iterator<Item = Option<f64>>) -> Agregado {
+    let valores: Vec<Option<f64>> = valores.collect();
+    let aplicables: Vec<f64> = valores.iter().flatten().copied().collect();
+    Agregado {
+        media: (!aplicables.is_empty())
+            .then(|| aplicables.iter().sum::<f64>() / aplicables.len() as f64),
+        aplicables: aplicables.len(),
+        total: valores.len(),
+    }
+}
+
 /// ¿El item tiene al menos un chunk en el corpus (recorte real)?
 pub fn item_tiene_chunks(repo: &crate::repositorio::RepositorioSqlite, item_id: &str) -> bool {
     let Ok(mut stmt) =
@@ -767,6 +967,156 @@ mod tests {
             resumen.recall_fusion_leg_k_simulado,
             vec![medio(8, 0.75), medio(16, 1.0)]
         );
+    }
+
+    fn piernas_de(id: &str, vectorial: &[&str], lexica: &[&str]) -> PiernasPregunta {
+        let ids = |pierna: &[&str]| pierna.iter().map(|s| s.to_string()).collect();
+        PiernasPregunta {
+            pregunta_id: id.into(),
+            vectorial: ids(vectorial),
+            lexica: ids(lexica),
+            degradacion: None,
+        }
+    }
+
+    #[test]
+    fn la_evaluacion_de_fusiones_da_el_recall_de_cada_peso_por_pregunta_y_subconjunto() {
+        let mut facil = pregunta(vec!["x".into()]);
+        facil.id = "p-a".into();
+        let mut dificil = pregunta(vec!["y".into(), "z".into(), "z2".into()]);
+        dificil.id = "p-b".into();
+        dificil.grupos_esperados = vec![vec!["y".into()], vec!["z".into(), "z2".into()]];
+        let mut sin_evidencia = pregunta(vec![]);
+        sin_evidencia.id = "p-c".into();
+        let banco = BancoBench {
+            banco: "banco-prueba".into(),
+            preguntas: vec![facil, dificil, sin_evidencia],
+        };
+        let piernas = [
+            // (1,1) a k=3: [l1, v1, l2]. l2 y x empatan en 1/62 con la misma
+            // mejor posición: decide el id, como el índice del corpus, y x
+            // queda afuera. Con peso vectorial 2: [v1, x, l1].
+            piernas_de("p-a", &["v1", "x"], &["l1", "l2"]),
+            // (1,1) a k=3: [a, z2, b], cubre el grupo de z. Con peso
+            // vectorial 2: [a, b, c], y z2 (1/61) queda debajo de c (2/63).
+            piernas_de("p-b", &["a", "b", "c", "y"], &["z2", "d"]),
+            piernas_de("p-c", &["x"], &[]),
+        ];
+        let subconjuntos = [
+            Subconjunto {
+                nombre: "fáciles".into(),
+                preguntas: vec!["p-a".into(), "p-c".into()],
+            },
+            Subconjunto {
+                nombre: "difíciles".into(),
+                preguntas: vec!["p-b".into()],
+            },
+        ];
+        let pesos = [(1.0, 1.0), (2.0, 1.0), (1.0, 0.0), (0.0, 1.0)];
+
+        let e = evaluar_fusiones(&banco, &piernas, &pesos, &subconjuntos, 3);
+
+        assert_eq!(e.k, 3);
+        let por_pregunta = |id: &str, recall: [Option<f64>; 4]| RecallPorPesos {
+            pregunta_id: id.into(),
+            recall: recall.to_vec(),
+        };
+        assert_eq!(
+            e.preguntas,
+            vec![
+                por_pregunta("p-a", [Some(0.0), Some(1.0), Some(1.0), Some(0.0)]),
+                por_pregunta("p-b", [Some(0.5), Some(0.0), Some(0.0), Some(0.5)]),
+                por_pregunta("p-c", [None; 4]),
+            ]
+        );
+        let media = |media: f64, aplicables: usize, total: usize| Agregado {
+            media: Some(media),
+            aplicables,
+            total,
+        };
+        let fusion = |(peso_vectorial, peso_lexico): (f64, f64), todas, faciles, dificiles| {
+            FusionPonderada {
+                peso_vectorial,
+                peso_lexico,
+                recall: media(todas, 2, 3),
+                subconjuntos: vec![
+                    RecallSubconjunto {
+                        nombre: "fáciles".into(),
+                        recall: media(faciles, 1, 2),
+                    },
+                    RecallSubconjunto {
+                        nombre: "difíciles".into(),
+                        recall: media(dificiles, 1, 1),
+                    },
+                ],
+            }
+        };
+        assert_eq!(
+            e.pesos,
+            vec![
+                fusion((1.0, 1.0), 0.25, 0.0, 0.5),
+                fusion((2.0, 1.0), 0.5, 1.0, 0.0),
+                fusion((1.0, 0.0), 0.5, 1.0, 0.0),
+                fusion((0.0, 1.0), 0.25, 0.0, 0.5),
+            ]
+        );
+    }
+
+    #[test]
+    fn el_archivo_de_piernas_vuelve_igual_de_su_json() {
+        // El corredor pago lo escribe y el evaluador sin API lo lee: si el
+        // formato no vuelve igual, la evaluación mide otras piernas.
+        let mut degradada = piernas_de("p-b", &[], &["z2", "d"]);
+        degradada.degradacion = Some("diagnóstico sin pierna semántica".into());
+        let archivo = ArchivoPiernas {
+            banco: "banco-prueba".into(),
+            leg_k: 24,
+            rrf_k: 60,
+            alcance: vec!["c-conflicto".into()],
+            piernas: vec![piernas_de("p-a", &["v1", "x"], &["l1", "l2"]), degradada],
+        };
+
+        let json = serde_json::to_string(&archivo).unwrap();
+        let valor: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(valor["leg_k"], 24);
+        assert_eq!(valor["rrf_k"], 60);
+        assert_eq!(valor["piernas"][0]["pregunta_id"], "p-a");
+        assert_eq!(valor["piernas"][0]["vectorial"][1], "x");
+        assert_eq!(valor["piernas"][1]["lexica"][0], "z2");
+
+        let leido: ArchivoPiernas = serde_json::from_str(&json).unwrap();
+        assert_eq!(leido, archivo);
+    }
+
+    #[test]
+    fn las_piernas_capturadas_son_las_que_el_flujo_fusiona() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedFijo), Box::new(RerankIdentidad));
+        let mut p = pregunta(vec!["chunk-2".into()]);
+        p.pregunta = "huelga segundo".into();
+
+        let piernas = capturar_piernas(&r, &rec, &p).expect("con evidencia se capturan");
+        assert_eq!(piernas.pregunta_id, "test-1");
+        assert_eq!(piernas.degradacion, None);
+        // Con pesos iguales, lo que fusiona el evaluador es lo que el flujo
+        // manda al rerank (`RerankIdentidad` conserva ese orden).
+        let alcance = alcance_seleccionar_todo(&r);
+        let flujo: Vec<String> = rec
+            .recuperar_en_colecciones(&r, &p.pregunta, &alcance, RERANK_DEPTH)
+            .fragmentos
+            .into_iter()
+            .map(|f| f.chunk_id)
+            .collect();
+        assert_eq!(flujo, ["chunk-1", "chunk-3", "chunk-2"]);
+        assert_eq!(fusion_ponderada(&piernas, 1.0, 1.0, RERANK_DEPTH), flujo);
+    }
+
+    #[test]
+    fn sin_evidencia_no_se_capturan_piernas_ni_se_paga_la_llamada() {
+        let r = repo();
+        let rec = Recuperador::con_clientes(Box::new(EmbedProhibido), Box::new(RerankIdentidad));
+        let p = pregunta(vec![]);
+        assert_eq!(capturar_piernas(&r, &rec, &p), None);
     }
 
     #[test]

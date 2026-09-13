@@ -24,7 +24,7 @@ pub const LEG_K: usize = 24;
 /// de un plan: la recuperación no entrega más fragmentos por consulta.
 pub const RERANK_DEPTH: usize = 16;
 /// Constante de suavizado de RRF.
-const RRF_K: usize = 60;
+pub const RRF_K: usize = 60;
 /// Tope de caracteres por fragmento.
 const SNIPPET_MAX: usize = 1600;
 
@@ -530,12 +530,30 @@ fn knn(chunks: &[ChunkRag], q_emb: &[f32]) -> Vec<usize> {
 /// otro solo en la otra a la misma posición— mandaría candidatos distintos al
 /// rerank en cada corrida.
 fn rrf_fuse(vectorial: &[usize], lexical: &[usize]) -> Vec<(usize, f64)> {
+    rrf_fuse_ponderada(vectorial, lexical, 1.0, 1.0)
+}
+
+/// RRF con un peso por pierna: cada aparición aporta
+/// `peso / (RRF_K + posición + 1)`. Con `(1.0, 1.0)` es `rrf_fuse`, con el
+/// mismo orden total. Sirve para medir fuera de línea si pesar más la pierna
+/// vectorial recupera evidencia que la fusión pareja empuja hacia abajo.
+///
+/// Una pierna con peso 0 queda apagada: no aporta candidatos ni posiciones.
+pub fn rrf_fuse_ponderada(
+    vectorial: &[usize],
+    lexical: &[usize],
+    peso_vectorial: f64,
+    peso_lexico: f64,
+) -> Vec<(usize, f64)> {
     // Por chunk: puntaje acumulado y mejor posición en alguna pierna.
     let mut scores: HashMap<usize, (f64, usize)> = HashMap::new();
-    for pierna in [vectorial, lexical] {
+    for (pierna, peso) in [(vectorial, peso_vectorial), (lexical, peso_lexico)] {
+        if peso == 0.0 {
+            continue;
+        }
         for (rank, &idx) in pierna.iter().enumerate() {
             let entrada = scores.entry(idx).or_insert((0.0, rank));
-            entrada.0 += 1.0 / (RRF_K as f64 + rank as f64 + 1.0);
+            entrada.0 += peso / (RRF_K as f64 + rank as f64 + 1.0);
             entrada.1 = entrada.1.min(rank);
         }
     }
@@ -661,6 +679,74 @@ mod tests {
             let d = r.ranking_diagnostico(&repo, "huelga segundo", &recorte, profundidad);
             assert_eq!(d.fusion_flujo, flujo, "profundidad {profundidad}");
         }
+    }
+
+    #[test]
+    fn con_pesos_iguales_la_fusion_ponderada_es_la_de_produccion() {
+        // Empates de puntaje (0 y 2, 1 y 3), un chunk en las dos piernas (4) y
+        // un empate exacto que decide la mejor posición (ver el test anterior).
+        let (a, b) = (100, 1);
+        let mut vectorial: Vec<usize> = (200..224).collect();
+        vectorial[2] = a;
+        vectorial[11] = b;
+        vectorial[5] = 4;
+        let mut lexica: Vec<usize> = (300..324).collect();
+        lexica[11] = b;
+        lexica[23] = a;
+        lexica[0] = 4;
+        for (v, l) in [
+            (&[0, 1][..], &[2, 3][..]),
+            (&vectorial[..], &lexica[..]),
+            (&[5, 7][..], &[][..]),
+        ] {
+            assert_eq!(rrf_fuse_ponderada(v, l, 1.0, 1.0), rrf_fuse(v, l));
+        }
+    }
+
+    #[test]
+    fn pesando_la_pierna_vectorial_sus_aciertos_propios_suben() {
+        let posicion =
+            |fusion: &[(usize, f64)], i: usize| fusion.iter().position(|(j, _)| *j == i).unwrap();
+        // Solo en una pierna y a la misma posición: con pesos iguales empatan y
+        // decide el índice (el léxico 3 va antes que el vectorial 10).
+        let pareja = rrf_fuse(&[10], &[3]);
+        assert!(posicion(&pareja, 3) < posicion(&pareja, 10));
+        let ponderada = rrf_fuse_ponderada(&[10], &[3], 2.0, 1.0);
+        assert!(posicion(&ponderada, 10) < posicion(&ponderada, 3));
+
+        // V queda 8.º en la vectorial (1/68) y L 4.º en la léxica (1/64): con
+        // pesos iguales L va antes; con peso vectorial 2, V suma 2/68 y pasa.
+        let (v, l) = (7, 5);
+        let mut vectorial: Vec<usize> = (200..208).collect();
+        vectorial[7] = v;
+        let mut lexica: Vec<usize> = (300..304).collect();
+        lexica[3] = l;
+        let pareja = rrf_fuse(&vectorial, &lexica);
+        assert!(posicion(&pareja, l) < posicion(&pareja, v), "{pareja:?}");
+        let ponderada = rrf_fuse_ponderada(&vectorial, &lexica, 2.0, 1.0);
+        assert!(
+            posicion(&ponderada, v) < posicion(&ponderada, l),
+            "{ponderada:?}"
+        );
+    }
+
+    #[test]
+    fn una_pierna_con_peso_cero_no_aporta_candidatos() {
+        // Con peso léxico 0 la fusión es la pierna vectorial sola: un chunk
+        // que solo trae la léxica no entra ni al final. Si entrara con puntaje
+        // 0, «solo léxica» rellenaría con aciertos vectoriales cuando la
+        // pierna léxica es más corta que el corte e inflaría su recall.
+        let orden = |fusion: Vec<(usize, f64)>| -> Vec<usize> {
+            fusion.into_iter().map(|(i, _)| i).collect()
+        };
+        assert_eq!(
+            orden(rrf_fuse_ponderada(&[4, 9], &[9, 2], 1.0, 0.0)),
+            [4, 9]
+        );
+        assert_eq!(
+            orden(rrf_fuse_ponderada(&[4, 9], &[9, 2], 0.0, 1.0)),
+            [9, 2]
+        );
     }
 
     #[test]
