@@ -1,0 +1,306 @@
+{
+  "banco_destino": "entropia-bench-v1",
+  "tanda": 3,
+  "protocolo": "screening + filtro (difícil para la búsqueda léxica) + revisión del historiador (pendiente)",
+  "candidatas": [
+    {
+      "id": "cand-021",
+      "nivel": 3,
+      "tipo": "interpretacion",
+      "pregunta": "¿Con qué otro oficio compara un entrevistado del puerto marplatense el suyo para reclamar que se lo reconozca como perjudicial, y qué consecuencias tendría, según él, ese reconocimiento?",
+      "items_esperados": [
+        "18b0b23c-c907-4916-b15c-8781be12341b"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-7e3c34e995eec556dda4d95d7562b7eed59c3cf4469c8bf04bd367f5ab709cec",
+        "ragchk-de104dfe9b14dba11207b5411fcf54beb722eabc470147e6a9386352b67ff0d0"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-7e3c34e995eec556dda4d95d7562b7eed59c3cf4469c8bf04bd367f5ab709cec"
+        ],
+        [
+          "ragchk-de104dfe9b14dba11207b5411fcf54beb722eabc470147e6a9386352b67ff0d0"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos, dos fragmentos consecutivos del mismo testimonio (Voces, «SOIP6»). El primero aporta la comparación con el cartero, la ley de higiene y seguridad que no se aplica y el listado de dolencias contraídas; el segundo, distinto e imprescindible, aporta el interés económico que se opone y las consecuencias de aplicarla (caída de pymes y del sistema cooperativo, más salario, jubilación temprana, descompresión del conflicto). Ninguno de los dos alcanza solo.",
+      "respuesta_referencia": "Lo compara con el del cartero: le indigna que el trabajo del cartero sea insalubre y el de esta industria no, cuando trabajan en condiciones de humedad, frío y temperaturas bajo cero durante años y han contraído varices, artrosis, artritis, problemas reumáticos crónicos, cervicales y de columna. Sostiene que un gran poder económico no quiere que se aplique la Ley de Insalubridad porque, si se aplicara, se caerían muchas pymes y el sistema de explotación de cooperativas, el trabajador cobraría más salario por ser tarea riesgosa y se jubilaría más temprano; y que jubilar a los 3.000 trabajadores que están en condiciones de hacerlo desinflamaría el conflicto social y permitiría que los más jóvenes se insertaran en el mercado laboral.",
+      "coleccion": "Voces",
+      "fragmento": "Y es una vergüenza que no sea establecida como insalubre cuando, por ejemplo, el trabajo del cartero es insalubre. […] si se aplicara […] se caerían muchas pymes. Se caería el sistema este de explotación de cooperativas y el trabajador cobraría más salario porque es una tarea riesgosa y se jubilaría más temprano.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-022",
+      "nivel": 3,
+      "tipo": "cifras",
+      "pregunta": "¿Con qué contraste numérico entre afiliados y personal no registrado cuestionó un militante la representatividad del gremio del pescado ante una comisión legislativa provincial, y dónde lo dijo?",
+      "items_esperados": [
+        "18b0b23c-c907-4916-b15c-8781be12341b"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-52ccf0ad7a000673a83a85c83da8019e92bc99ff852680a616e8a32d88eb2710",
+        "ragchk-b1464a881f60b6f76f57f674648bdd1dc89906305c2ba7b0ee9b54e01ce9c44a",
+        "ragchk-e38a7dbd02b05efce6bc739bd902d4dc82c19c2d9fb08317f871deb3a5842ad9"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-52ccf0ad7a000673a83a85c83da8019e92bc99ff852680a616e8a32d88eb2710"
+        ],
+        [
+          "ragchk-b1464a881f60b6f76f57f674648bdd1dc89906305c2ba7b0ee9b54e01ce9c44a",
+          "ragchk-e38a7dbd02b05efce6bc739bd902d4dc82c19c2d9fb08317f871deb3a5842ad9"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos. La cifra (1.800 afiliados frente a 10.000 trabajadores en negro) está solo en un fragmento. El ámbito en que la dijo es una pieza distinta y aparece por solapamiento en dos fragmentos consecutivos, alternativos entre sí: los dos dicen que lo invitaron a una reunión de la Comisión de Intereses Marítimos de la provincia de Buenos Aires en La Plata, así que alcanza con recuperar cualquiera de ellos.",
+      "respuesta_referencia": "Dijo que le habría dado vergüenza venir a la presentación de un gremio como el SOIP demostrando que tiene 1.800 afiliados y 10.000 trabajadores en negro dentro de una misma industria, y preguntó a quién representaban esos dirigentes. Lo dijo en una reunión de la Comisión de Intereses Marítimos de la provincia de Buenos Aires, en La Plata, a la que fue invitado junto con otros compañeros y en la que le tocó hablar en último lugar, ante dirigentes gremiales, empresarios y políticos.",
+      "coleccion": "Voces",
+      "fragmento": "a mí me hubiera dado vergüenza venir a la presentación de un gremio como el SOIP demostrando que tengo 1800 afiliados y 10.000 trabajadores en negro. Dentro de una misma industria. ¿A quién representan estos señores?",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-023",
+      "nivel": 2,
+      "tipo": "contenido",
+      "pregunta": "Según un entrevistado del gremio del pescado, ¿con qué número se juzgaba el estado del pescado que llegaba a las plantas, qué valores se toleraban antes y qué se le agrega hoy para disimular su deterioro?",
+      "items_esperados": [
+        "add5b9de-ccc9-4ab5-a4ac-22c9f8b15780"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-09b8baaf68932899219552cbc9381b2fcbca969bc26fc2994e672ab5315d0e0c",
+        "ragchk-49ee203633fa3cf8acb66a3ae723d71a7405b892ed502e77363252b72b319460"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-09b8baaf68932899219552cbc9381b2fcbca969bc26fc2994e672ab5315d0e0c"
+        ],
+        [
+          "ragchk-49ee203633fa3cf8acb66a3ae723d71a7405b892ed502e77363252b72b319460"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos, dos fragmentos consecutivos del mismo testimonio (Voces, «SOIP4»). El primero define la medida y da la escala tolerada en otra época (20; 21 o 22 ya delicado; 26 al mercado negro) y la tolerancia actual; el segundo, distinto, aporta el tratamiento con que hoy se disimula el estado de la materia prima. La escala no está en el segundo y el tratamiento no está en el primero.",
+      "respuesta_referencia": "Se usaba el «volátil», una medida que se utiliza para la descomposición: se trabajaba con 20; 21 o 22 ya era delicado, y lo que llegaba a 26 iba a los mercados del tercer mundo y al mercado negro. Hoy es muy común que se tome 23 o 24, y también 30 o más, y se lo llena de líquidos para tratarlo, blanquearlo y darle textura, entre otras cosas.",
+      "coleccion": "Voces",
+      "fragmento": "trabajamos con 20, entró con un volátil, que es una medida que se utiliza para la descomposición. 21, 22, ya después era delicado. Ya 26 iba para los mercados del tercer mundo, el mercado negro y eso. Hoy en día es muy común que tomés 23, 24 y haya además de 30, y 30 también. Y lleno de líquidos para tratarlo y para tratar de blanquearlo y darle textura",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-024",
+      "nivel": 2,
+      "tipo": "condiciones_trabajo",
+      "pregunta": "En una fábrica de conservas, ¿de qué dependía que a una obrera se le pagara el jornal más alto, y qué ocurría con las menores puestas a esas mismas tareas?",
+      "items_esperados": [
+        "b42037d0-24ba-499d-913b-4d2f51380b98"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-6e619e2fc109c0a6cd5e5c03d918cb6cff237e96bb1bb73d575679b23b3a2ba6",
+        "ragchk-96e581dbfd3acf27064a2f223675b2005e529fc817af6c4aa5b55f570f9c0eb7"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-6e619e2fc109c0a6cd5e5c03d918cb6cff237e96bb1bb73d575679b23b3a2ba6"
+        ],
+        [
+          "ragchk-96e581dbfd3acf27064a2f223675b2005e529fc817af6c4aa5b55f570f9c0eb7"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos del mismo testimonio (Voces, «Elba 2»), no consecutivos. Uno da la regla y su excepción: a las señoras grandes que hacían «trabajo de hombre» les pagaban como a los hombres, pero a ella, siendo menor, la hacían trabajar de hombre sin pagarle como tal, y enumera en qué consistía ese trabajo. El otro aporta un caso adicional, verificable por sí mismo: el acomodado de la anchoíta fresca salada en las tinas también se pagaba «como hombre» por ser trabajo de hombres.",
+      "respuesta_referencia": "Dependía de la tarea y no de quién la hiciera: a las señoras grandes que trabajaban «de hombre» les pagaban como a los hombres, y lo mismo ocurría con las mujeres que acomodaban la anchoíta fresca salada en las tinas grandes, porque era «trabajo de hombres». El trabajo de hombre era el más pesado: cargar los camiones con los cajones vacíos y cargar la basura —las cabezas iban en cajones y se llevaban con un gancho—, siempre mojados y en el agua. A ella, en cambio, siendo menor la hacían trabajar de hombre pero no le pagaban como hombre.",
+      "coleccion": "Voces",
+      "fragmento": "Y las señoras grandes que trabajaban de hombre, les pagaban como a los hombres. A mí me hacían, siendo menor, trabajar de hombre, pero no me pagaban como hombre.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-025",
+      "nivel": 1,
+      "tipo": "memoria",
+      "pregunta": "Una ex obrera de la conserva de pescado recordó una consulta en el servicio de salud de la empresa siendo casi una niña. ¿Qué le dijeron que tenía y qué reacción tuvo su familia?",
+      "items_esperados": [
+        "40cc79a5-5f5c-4588-82e6-f05def55caad"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-fd80383e1812b28637dbd09a8160fb16069ae3cd2d07dd9dba74d34c4e757d01"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-fd80383e1812b28637dbd09a8160fb16069ae3cd2d07dd9dba74d34c4e757d01"
+        ]
+      ],
+      "grupos_justificacion": "Un solo grupo: el episodio completo —el consultorio médico de la fábrica, el dolor de rodilla, el diagnóstico de reuma a los 14 o 15 años y la reacción de la madre por el frío del lugar— está contenido en un único fragmento del testimonio de Voces «Alcira». Los fragmentos vecinos hablan de los capataces y de los delegados, y no lo mencionan.",
+      "respuesta_referencia": "En la fábrica había consultorio médico y ella tuvo que ir una vez porque le dolía una rodilla: le dijeron que era reuma, cuando tenía 14 o 15 años. Su mamá la quería sacar del trabajo porque decía que hacía frío, ya que era un lugar frío aunque no estuvieran mojados.",
+      "coleccion": "Voces",
+      "fragmento": "Tenían un consultorio médico también. En una ocasión yo tuve que ir porque me dolía una rodilla, que me dijeron que era reuma y yo tenía 14, 15 años, viste. Y bueno, mi mamá me quería sacar porque decía que hacía frío.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-026",
+      "nivel": 2,
+      "tipo": "trayectorias",
+      "pregunta": "¿Cómo se aprendía el oficio de cortar el pescado en las plantas del puerto: con quién empezaba el principiante, qué tarea hacía primero y quién le pagaba al comienzo?",
+      "items_esperados": [
+        "489785b0-011b-4baa-af6c-192c98f135f1"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-6796b84a1de7e1e372a3836177d3aac7eeb0fe3c0785333084f5ce475b0a0901",
+        "ragchk-c4d0d617d003e35f0e2fd3839117f239f3f04e8152f393b7e0d0d917234bd478"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-6796b84a1de7e1e372a3836177d3aac7eeb0fe3c0785333084f5ce475b0a0901",
+          "ragchk-c4d0d617d003e35f0e2fd3839117f239f3f04e8152f393b7e0d0d917234bd478"
+        ],
+        [
+          "ragchk-c4d0d617d003e35f0e2fd3839117f239f3f04e8152f393b7e0d0d917234bd478"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos del mismo testimonio (Voces, «A_y_J»). El primero reúne dos fragmentos alternativos: la tarea inicial —«acuerear», que es sacarle el cuero a la manoza, en los ratos libres y junto a un filetero— aparece por solapamiento al final de uno y al comienzo del siguiente, así que alcanza con recuperar cualquiera de los dos. El segundo grupo es una pieza distinta, presente solo en el segundo fragmento: quién pagaba al principiante (primero el propio filetero, no la empresa) y el pasaje posterior a la categoría de aprendiz. Por eso ese fragmento figura en los dos grupos.",
+      "respuesta_referencia": "Se aprendía con un filetero: en los ratos libres se iba a «acuerearles», que es sacarle el cuero a la manoza, y después le iban enseñando. Como la planta necesitaba fileteros, tomaba chicos y les ponía categoría de aprendiz. Al principio le pagaba el propio filetero, no la empresa; después la empresa veía cómo era la evolución y lo tomaba en categoría de aprendiz, y más tarde lo dejaba filetear.",
+      "coleccion": "Voces",
+      "fragmento": "Empezás en los ratos libres yendo a acuerearla a los fileteros. Aprendés a acuerear primero, que es sacarle el cuero a la manoza. […] primero el filetero te daba algo. ¿No la empresa? Después la empresa veía cómo era la evolución y te tomaba. En categoría de aprendiz",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-027",
+      "nivel": 2,
+      "tipo": "cifras",
+      "pregunta": "Un estudio marplatense de comienzos de los sesenta describe en qué proporciones se prorrateaba lo obtenido entre el poseedor de la lancha, los artes utilizados y quienes iban embarcados. ¿Cuál era esa regla?",
+      "items_esperados": [
+        "762b1302-8434-4727-9410-4a8531d01ad0"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-caf0b8017a947c438c8b778fd0f6459852b7c224f6ec983f0223a7952d26d5dd"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-caf0b8017a947c438c8b778fd0f6459852b7c224f6ec983f0223a7952d26d5dd"
+        ]
+      ],
+      "grupos_justificacion": "Un solo grupo: la regla de reparto completa está en un único fragmento de la nota sobre el estudio de la explotación pesquera local. Los fragmentos vecinos tratan de la evolución de la producción costera y de la pesca de altura, y no la contienen.",
+      "respuesta_referencia": "Dos partes para el patrón o propietario de la embarcación; una parte por la red, y dos partes si son dos o más redes; y una parte para cada tripulante, incluyendo al dueño si este contribuye con su trabajo personal.",
+      "coleccion": "SOIP 1961",
+      "fragmento": "La distribución, por último, se cumple de la siguiente manera: dos partes para el patrón o propietario de la embarcación; una parte por la red y dos partes si son dos o más redes, y una parte para cada tripulante, incluyendo al dueño si éste contribuye con su trabajo personal.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-028",
+      "nivel": 2,
+      "tipo": "propuestas",
+      "pregunta": "¿Qué reclamaba el sindicato marplatense de los albañiles, en su pliego de mejoras, para quien fuera llamado a filas y para quien ya hubiese iniciado su trámite previsional?",
+      "items_esperados": [
+        "c8c4e25a-8605-45b2-b35f-8e531fd28f44"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-eb64ab66f1c52ad6c82ba7c437b402b236edb9fd225cb570a47f6bf9513d3f30",
+        "ragchk-6bf3f5d682043f019e98aa6836930dae7f58267a5429c4d11a5c3265a6dc2521"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-eb64ab66f1c52ad6c82ba7c437b402b236edb9fd225cb570a47f6bf9513d3f30"
+        ],
+        [
+          "ragchk-6bf3f5d682043f019e98aa6836930dae7f58267a5429c4d11a5c3265a6dc2521"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos, dos fragmentos consecutivos de la misma nota sobre los puntos adicionales que el gremio presentó ante la Subsecretaría de Trabajo. El pedido por el servicio militar está solo en el primero; el artículo 10º sobre la estabilidad de quien tramita su jubilación, solo en el segundo. Cada uno responde la mitad de la pregunta.",
+      "respuesta_referencia": "Para el obrero que tuviera que cumplir el servicio militar obligatorio, pedía que percibiera quinientos pesos mensuales mientras durara su incorporación bajo bandera. Y en el artículo 10º pedía que todo obrero que solicitara la jubilación y comenzara las tramitaciones fuese mantenido en su puesto de trabajo hasta la finalización de las gestiones y hasta percibir el primer pago jubilatorio.",
+      "coleccion": "SOIP 1961",
+      "fragmento": "También se pide que el obrero que tenga que cumplir el servicio militar obligatorio perciba quinientos pesos mensuales mientras dure su incorporación bajo bandera. […] En el artículo 10° la organización pide que todo obrero que solicite la jubilación y comience las tramitaciones sea mantenido en su puesto de trabajo hasta la finalización de las gestiones y percibir el primer pago jubilatorio.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-029",
+      "nivel": 3,
+      "tipo": "interpretacion",
+      "pregunta": "¿Qué condición sobre el mayor costo del trabajo fijó la autoridad al aprobar dos acuerdos colectivos del gremio marplatense de la pesca, y a qué piso legal debían llevarse los haberes desde enero?",
+      "items_esperados": [
+        "07853a04-519a-41ae-8dd5-b9e8315b4c83",
+        "0af2aa86-a77b-473a-916f-73327ead8e35"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-70163f21e47e8bc1574bab8369d1076b15450624e2ba99c6ed3400676289b34a",
+        "ragchk-b399df55f859db4116917e8fbce20ced14b825f9058c1fee281287094e6ad33b",
+        "ragchk-f9ff8e4cddff6a8c292cbdc8bcb4244da3fa2e8638071fe34bd227d19d6f7a7e",
+        "ragchk-b4185c4ccaec077b48174f625608a4a164efb43a171c18e1f607c9a424c2e022"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-70163f21e47e8bc1574bab8369d1076b15450624e2ba99c6ed3400676289b34a",
+          "ragchk-b399df55f859db4116917e8fbce20ced14b825f9058c1fee281287094e6ad33b"
+        ],
+        [
+          "ragchk-f9ff8e4cddff6a8c292cbdc8bcb4244da3fa2e8638071fe34bd227d19d6f7a7e",
+          "ragchk-b4185c4ccaec077b48174f625608a4a164efb43a171c18e1f607c9a424c2e022"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos de dos alternativas cada uno. Las resoluciones 757 y 758 homologan sendos convenios del mismo gremio —uno con la Cámara Argentina de Productores de Filetes de Pescado y el otro con la Cámara Marplatense de Industriales del Pescado— y repiten el mismo texto, de modo que los dos fragmentos de cada grupo son copias alternativas y alcanza con recuperar una. El primer grupo aporta la condición de absorción de los mayores costos laborales sin trasladarlos al precio; el segundo, distinto y también necesario, aporta la ley cuya letra y espíritu no debía vulnerarse y la actualización de los salarios a los mínimos legales desde el 1º de enero de 1970.",
+      "respuesta_referencia": "Que la absorción de los mayores costos laborales debía ser efectiva por parte de las empresas, que en consecuencia no podían trasladar su incidencia al precio de los productos, de modo que el resultado de la convención colectiva no vulnerara la letra y el espíritu de la Ley 18.397; la homologación mantenía su vigencia en tanto el acuerdo armonizara con los principios de la política de estabilidad y desarrollo enunciada por el Gobierno Nacional. Además, a partir del 1º de enero de 1970 y de conformidad con la Ley 18.337, los salarios fijados en la convención colectiva debían actualizarse a los salarios mínimos dispuestos en esa ley.",
+      "coleccion": "Resoluciones SOIP",
+      "fragmento": "deberá ser efectiva la absorción por parte de las Empresas, de los mayores costos laborales que se han de producir, no pudiendo en consecuencia trasladar la incidencia de los mismos al precio de los productos […] A partir del 1º de enero de 1970, de conformidad a lo establecido en la Ley Nº 18.337, los salarios fijados en la Convención Colectiva de Trabajo, deberán actualizarse a los salarios mínimos dispuestos en la citada Ley.",
+      "lexico_top16": 0.0
+    },
+    {
+      "id": "cand-030",
+      "nivel": 3,
+      "tipo": "atribucion",
+      "pregunta": "¿Qué pidió la organización marplatense de los obreros del pescado respecto del gremio de los alimentos, y en qué antecedente y artículos se apoyó la decisión que se lo concedió?",
+      "items_esperados": [
+        "080faf16-00a0-4e6a-b36d-7829eac8fdf9"
+      ],
+      "chunk_ids_esperados": [
+        "ragchk-8e5cb38acce513ec726912b2fa92f912d6e963b91a5b57ecf123d31fa25316e1",
+        "ragchk-03aced3f24166802add2883c0776d397d607c98bfda53f63a06a33f98fc73358"
+      ],
+      "grupos_esperados": [
+        [
+          "ragchk-8e5cb38acce513ec726912b2fa92f912d6e963b91a5b57ecf123d31fa25316e1"
+        ],
+        [
+          "ragchk-03aced3f24166802add2883c0776d397d607c98bfda53f63a06a33f98fc73358"
+        ]
+      ],
+      "grupos_justificacion": "Dos grupos, los dos fragmentos de la resolución 1092. El primero trae el pedido —la exclusión de su zona de actuación— y el antecedente que lo funda: la Resolución 497/62, que le había otorgado personería gremial con zona en Mar del Plata por ser la más representativa de la actividad específica, desestimando la opción del sindicato de la alimentación. El segundo trae la base legal invocada y el resolutivo, que no están en el primero. El texto del documento está muy degradado por el OCR, lo que vuelve la pregunta aún menos accesible a la búsqueda léxica.",
+      "respuesta_referencia": "Pidió que se excluyera de su zona de actuación al «Sindicato de Trabajadores de Industrias de la Alimentación». La decisión se apoyó en la Resolución 497/62, por la cual la peticionante había obtenido personería gremial con zona de actuación en la ciudad de Mar del Plata por ser la más representativa de la actividad específica, habiéndose desestimado por ello la opción deducida por el sindicato de la alimentación, y en los artículos 18, 19 y concordantes de la ley 14.455. El ministro resolvió excluirlo de esa zona de actuación en cuanto se refiere a la especialidad y al personal representados por el primero.",
+      "coleccion": "Resoluciones SOIP",
+      "fragmento": "solicita a fs. 189 la exclusión de su zona de actuación del \"Sindicato de Trabajadores de Industries de la Alimentación\" […] es procedente la petición sub-ordinada, con arregle a la estatufds por los artículos 18, 19 y coordinantes de la ley 14.455",
+      "lexico_top16": 0.0
+    }
+  ],
+  "descartadas": [
+    {
+      "pregunta": "¿Por qué la agrupación de trabajadores del pescado nacida durante el conflicto de mediados de los años dos mil dejó de lado su nombre original? (Voces, «SOIP6»)",
+      "motivo": "La resuelve la búsqueda léxica (los dos grupos quedan en los puestos 1 y 3 del top 16): el episodio se cuenta con las mismas palabras con que hay que preguntarlo —«agrupación», «conflicto», «nombre», «pescado», «peronistas»— y sacarlas vuelve la pregunta irreconocible. Chunks ragchk-bce1c2b8…, ragchk-29e5d9cd…."
+    },
+    {
+      "pregunta": "¿Con qué promesa logró el patrón de una planta pesquera, a comienzos de los años noventa, que casi todo su personal firmara la dimisión, y qué le ocurrió a quien se negó? (Voces, «SOIP6»)",
+      "motivo": "RESERVA (pasa el filtro, léxico 0/2), fuera por cupo: el cierre de Sur Pes en 1991, con la renuncia firmada a cambio de una indemnización prometida y la promesa de integrar una cooperativa; chunks ragchk-656b6b60…, ragchk-1b21a8d7…. Quedó afuera para no llevar tres preguntas a un mismo ítem de Voces."
+    },
+    {
+      "pregunta": "¿Qué abusos de la fuerza pública denunció en 1936 el gremio de la conserva marplatense contra sus reuniones y su sede? (reserva de la tanda 2)",
+      "motivo": "Vuelve a pasar el filtro con el criterio actual (léxico 0/2), pero queda fuera del sesgo de esta tanda: SOIP 1930 ya aportó dos preguntas en la tanda 2 y el cupo no Voces se reservó para SOIP 1961 y Resoluciones SOIP. Sigue en reserva, con los chunks ragchk-826ff670… / ragchk-6b14f806… y ragchk-b7f575a1… / ragchk-a47acf2a…."
+    },
+    {
+      "pregunta": "¿A quiénes responsabilizaban los industriales conserveros de entorpecer la provisión de pescado en 1940, y de qué los acusaban? (reserva de la tanda 2)",
+      "motivo": "Descartada por duplicar evidencia, como señalaba la propia reserva: se ancla en el mismo telegrama que soip-019 (ragchk-d2e2f25d…, ragchk-f81ec900…)."
+    },
+    {
+      "pregunta": "¿Cómo se repartía lo obtenido en una salida de pesca costera entre el dueño de la embarcación, las redes y la tripulación?",
+      "motivo": "Primera redacción de cand-027: la resolvía la búsqueda léxica (puesto 7 u 8 según la variante) porque «pesca costera», «dueño», «embarcación» y «tripulante» son las palabras literales del fragmento. Se reformuló con «lancha», «artes utilizados» y «quienes iban embarcados»."
+    },
+    {
+      "pregunta": "¿Qué dolencia le atribuyeron a una adolescente en el servicio médico de la fábrica de conservas donde trabajaba, y por qué su madre quiso retirarla del empleo?",
+      "motivo": "Primera redacción de cand-025: la resolvía la búsqueda léxica (puesto 7) por «médico» y «fábrica», que están en el fragmento. Se reformuló como «servicio de salud de la empresa»."
+    },
+    {
+      "pregunta": "¿Qué le quitó el ministerio en 1964 al gremio que agrupaba a los obreros de los alimentos, y con qué fundamento?",
+      "motivo": "Variante descartada de cand-030: pasaba el filtro, pero el año no consta en el texto de los fragmentos esperados (solo en el número de expediente y en el título del ítem), así que la respuesta de referencia no lo sostendría."
+    },
+    {
+      "pregunta": "¿Qué respondió la CGT marplatense al comunicado del Sindicato Obrero de la Construcción sobre los funcionarios de la subsecretaría de Trabajo?",
+      "motivo": "Se superpone con soip-027 y soip-014, que ya se apoyan en el mismo conflicto de representación del gremio de la construcción en 1961: aportaría una tercera pregunta sobre el mismo episodio."
+    },
+    {
+      "pregunta": "¿Qué poder económico se beneficia de que no se declare nociva la actividad de las plantas del puerto, y qué cambiaría para las pymes y las cooperativas?",
+      "motivo": "Primera redacción de cand-021: la resolvía a medias la búsqueda léxica (segundo grupo en el puesto 2) porque «pymes» y «cooperativas» son las palabras del fragmento. Se reformuló pidiendo la comparación de oficios y las consecuencias, sin nombrarlas."
+    }
+  ],
+  "estado": "pendiente de revisión del historiador"
+}
