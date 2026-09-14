@@ -1,15 +1,24 @@
-//! Filtro léxico de una tanda de candidatas del EntropIA-Bench, contra el
-//! corpus real (`entropia.sqlite`). No hace llamadas pagas: solo FTS5.
+//! Filtro léxico del EntropIA-Bench contra el corpus real (`entropia.sqlite`).
+//! No hace llamadas pagas: solo FTS5.
 //!
-//! El banco crece con preguntas que la búsqueda léxica NO resuelve sola. Este
-//! corredor mide exactamente la métrica del bench (`buscar_fts5` sobre la
-//! pregunta, a `RERANK_DEPTH`, con recall por grupos de evidencia) y declara
-//! el veredicto de cada candidata. También verifica que los chunks e items
-//! esperados existan en el corpus: un id inventado no llega al banco.
+//! Dos corredores, la misma medición:
 //!
-//! `TANDA` elige el archivo (`bench/candidatas/tanda-<N>.json`); sin ella toma
-//! la tanda de número más alto. Es `#[ignore]`:
-//! `TANDA=3 cargo test --test bench_screening -- --ignored --nocapture`.
+//! - `filtra_la_tanda_de_candidatas` filtra una tanda todavía no aprobada
+//!   (`bench/candidatas/tanda-<N>.json`). El banco crece con preguntas que la
+//!   búsqueda léxica NO resuelve sola. También verifica que los chunks e items
+//!   esperados existan en el corpus: un id inventado no llega al banco.
+//! - `mide_la_dificultad_del_banco` corre lo mismo sobre `bench/preguntas.json`.
+//!   La dificultad NO es una propiedad de la pregunta sino de la pierna léxica
+//!   del momento: cambiar `fts5_query` o `RERANK_DEPTH` mueve el criterio y deja
+//!   vencido el filtro de las tandas viejas. Por eso se vuelve a medir acá en
+//!   vez de anotarse en el banco.
+//!
+//! La medición es la del bench: `buscar_fts5` sobre la pregunta, a
+//! `RERANK_DEPTH`, con recall por grupos de evidencia.
+//!
+//! `TANDA` elige el archivo de candidatas; sin ella toma la de número más alto.
+//! Los dos son `#[ignore]`:
+//! `TANDA=3 cargo test --test bench_screening -- --ignored --nocapture`
 
 use entropia_agent::recuperacion::RERANK_DEPTH;
 use entropia_agent::repositorio::RepositorioSqlite;
@@ -173,4 +182,75 @@ fn filtra_la_tanda_de_candidatas() {
         }
     }
     assert!(problemas.is_empty(), "la tanda tiene evidencia inválida");
+}
+
+#[test]
+#[ignore = "mide la dificultad del banco contra el corpus real"]
+fn mide_la_dificultad_del_banco() {
+    let Some(path) = ruta_corpus() else {
+        eprintln!("sin corpus real: se salta la medición");
+        return;
+    };
+    let repo = RepositorioSqlite::abrir(&path).unwrap();
+    let banco = entropia_agent::bench::cargar_banco("bench/preguntas.json").unwrap();
+
+    println!(
+        "
+Banco {} — {} preguntas",
+        banco.banco,
+        banco.preguntas.len()
+    );
+    println!(
+        "dificultad: recall léxico sobre grupos de evidencia, k = {RERANK_DEPTH}
+"
+    );
+
+    let mut dificiles = 0;
+    let mut faciles = 0;
+    let mut parciales = 0;
+    let mut sin_evidencia = 0;
+    for p in &banco.preguntas {
+        let grupos = if p.grupos_esperados.is_empty() {
+            p.chunk_ids_esperados
+                .iter()
+                .map(|c| vec![c.clone()])
+                .collect()
+        } else {
+            p.grupos_esperados.clone()
+        };
+        if grupos.is_empty() {
+            sin_evidencia += 1;
+            continue;
+        }
+        let lexicos = repo.buscar_fts5(&p.pregunta, RERANK_DEPTH);
+        let cubiertos = grupos
+            .iter()
+            .filter(|g| g.iter().any(|c| lexicos.contains(c)))
+            .count();
+        let recall = cubiertos as f64 / grupos.len() as f64;
+        let franja = if recall == 0.0 {
+            dificiles += 1;
+            "dificil"
+        } else if recall < 1.0 {
+            parciales += 1;
+            "parcial"
+        } else {
+            faciles += 1;
+            "facil  "
+        };
+        let posiciones: Vec<String> = grupos.iter().map(|g| posicion(g, &lexicos)).collect();
+        println!(
+            "{franja}  {:<10} [{:<18}] léxico {recall:.2} ({cubiertos}/{}), posiciones: {}",
+            p.id,
+            p.tipo,
+            grupos.len(),
+            posiciones.join(", ")
+        );
+    }
+
+    println!(
+        "
+difíciles {dificiles}, parciales {parciales}, fáciles {faciles}, sin evidencia {sin_evidencia} (de {})",
+        banco.preguntas.len()
+    );
 }
