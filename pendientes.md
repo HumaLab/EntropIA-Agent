@@ -10,7 +10,7 @@ trabajo de Fase 7 sin commitear.
 |---|---|---|---|---|
 | 1 | Límites de recuperación: por búsqueda (promete 100, entrega 16) y por plan (20 fijo) | Defecto de contrato | Chico-mediano | **Resuelto** (`3ac3915`, `2e6f2f5`) |
 | 2 | Gates de Fase 6 apagados | Fase del plan | Mediano | **Resuelto** con otro diseño (`bbc5457`, `a244f47`; UI en Pro-Lite `c7b59a3`) |
-| 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | Primera pasada en Lite hecha; faltan gates y Pro |
+| 3 | Aceptación de Fase 7 con backend real | Fase del plan | Mediano | **Resuelto** en Lite: las dos pasadas verificadas en `estado.sqlite`; la variante Pro queda pospuesta por decisión del usuario |
 | 4 | El bench mide mal antes de crecer | Fase del plan | Mediano | En curso: banco de 32 (22 miden); profundidad 16, 24 por pierna y fusión (1,1) confirmadas con datos; falta crecer el banco y medir con las consultas del plan |
 | 5 | Informe sin regeneración por sección | Brecha funcional | Mediano | **Resuelto** (A y B): motor `5d12fe3`, UI en Pro-Lite `0720e40`; la C (evidencia nueva) queda afuera |
 | 6 | Fechas parciales guardadas como `YYYY-00-00` | Deuda latente | Chico | **Resuelto**: año, mes y día en columnas propias (migración 6); `date` queda como texto derivado en ISO reducido |
@@ -27,12 +27,16 @@ trabajo de Fase 7 sin commitear.
   El diseño vigente está en `docs/superpowers/specs/2026-09-11-gates-fase6-design.md`. La UI de
   gates no se restauró: nunca había existido, se construyó.
 - #3: los 8 escenarios de la primera pasada funcionan en Lite y quedaron verificados en
-  `estado.sqlite` (pausa manual y reinicio sin repetir etapas terminadas). Falta la segunda pasada
-  (gate del plan con reinicio, editar búsquedas, aprobar) y la variante Pro.
+  `estado.sqlite` (pausa manual y reinicio sin repetir etapas terminadas).
 
-Orden propuesto para lo que queda: cerrar **#3** (segunda pasada con gates, después Pro);
-luego **#4**, que además fija los números hoy provisorios (tope de consultas de
-`trayectorias`, profundidad de recuperación, umbrales de una eventual auto-aprobación);
+**Estado al 2026-09-14.**
+- #3: la segunda pasada (gates) también corrió en Lite y quedó verificada en `estado.sqlite`.
+  El detalle está al final de la sección 3. La variante Pro queda pospuesta por decisión del
+  usuario, así que la fase se da por aceptada en Lite.
+
+Orden propuesto para lo que queda: **#4**, que además fija los números hoy provisorios
+(tope de consultas de `trayectorias`, profundidad de recuperación, umbrales de una
+eventual auto-aprobación);
 después **#5**. **#6** no tiene consecuencias hoy: se resuelve cuando aparezca el primer
 consumidor de esa columna o junto con otra migración del ledger.
 
@@ -189,6 +193,31 @@ verde.
 **Cómo se verifica.** Una lista de escenarios con resultado observado por el
 historiador, en cada variante. Cada defecto que aparezca se corrige con un test en el
 crate que lo reproduzca antes del arreglo.
+
+**Resultado de la segunda pasada (2026-09-14, Lite).** Dos investigaciones reales, verificadas
+en `%APPDATA%\com.entropia.shared\research\estado.sqlite` en solo lectura. Sin defectos.
+
+- *Aprobar y buscar* (`job-242820-0`): gate `alcance='plan'` abierto 23:59:00 y aprobado
+  00:00:00. Cero `llm_calls` y cero eventos `query` dentro de la ventana del gate. Los 16
+  eventos `query` posteriores coinciden uno a uno, y en orden, con las búsquedas del plan
+  aprobado.
+- *Reinicio con gate pendiente y edición de búsquedas* (`job-242820-355`): gate abierto
+  00:39:09; la app se cerró y se reabrió (los identificadores pasan del prefijo `242820` al
+  `252804`, es decir, proceso nuevo). Entre 00:39:00 y 00:42:25 no hubo `llm_calls`, ni eventos
+  `query`, ni ninguna fila con `decision='approved'`: **no hubo auto-aprobación**. La aprobación
+  aparece recién a las 00:42:05, sobre la versión 3 del plan.
+- *Las búsquedas editadas son las que corren*: la consulta 3 pasó de
+  `"picapedrero" OR "picapedreros" OR "picapedrera" OR "picapedreras"` (v2) a
+  `"picapedrero" OR "picapedreros" OR "AOMA"` (v3), y el evento `query` de las 00:42:09 usa la
+  versión con `AOMA`, sin reabrir la ronda de clarificación.
+- *Sin etapas repetidas*: un solo `prospection`, `archive`, `bibliography`, `verification` y
+  `report` por job; ambos cerraron en `done` / `completed`.
+
+**Trampa para futuras auditorías.** Aprobar sin editar también crea una versión nueva del
+artefacto de plan, y al resolver un gate la fila pendiente de `human_decisions` pasa a
+`obsolete=1` y se escribe una fila nueva con la decisión. Por eso `human_decisions` sola no
+distingue «aprobar» de «editar y aprobar»: hay que comparar el `content_json` de las versiones
+del plan.
 
 ---
 
