@@ -2,7 +2,8 @@ mod common;
 use entropia_agent::{
     cliente_llm::{ClienteLlm, TurnoAgente},
     estado::EstadoDb,
-    investigacion::procesar,
+    fuente_bibliografica::FuenteBibliografica,
+    investigacion::{procesar, procesar_con},
     repositorio::RepositorioSqlite,
 };
 use serde_json::{json, Value};
@@ -3323,4 +3324,302 @@ fn una_seccion_guardada_no_rompe_la_lectura_de_la_investigacion() {
         .find(|a| a["kind"] == "seccion")
         .expect("la sección figura entre los artefactos");
     assert_eq!(seccion["content"]["provenance"][0], "chunk-1", "{seccion}");
+}
+
+// ── Alcance bibliográfico ────────────────────────────────────────────────────
+
+/// Pedido de create del guion base, con los campos extra pisando los del guion.
+fn pedido_create(extra: Value) -> Value {
+    let mut r = json!({"op":"create","question":"¿Hubo huelga?","project":"p","collection_ids":["c-conflicto"],"max_llm_calls":30,"max_cost":1.0});
+    for (k, v) in extra.as_object().unwrap() {
+        r[k] = v.clone();
+    }
+    r
+}
+
+/// Corre la investigación con una fuente bibliográfica, respondiendo la ronda
+/// y aprobando el gate del plan cuando frena.
+fn correr_con_bib(
+    db: &EstadoDb,
+    repo: &RepositorioSqlite,
+    m: &dyn ClienteLlm,
+    bib: &dyn FuenteBibliografica,
+    dir: &std::path::Path,
+    id: &str,
+) -> Value {
+    let mut out = procesar_con(
+        db,
+        repo,
+        m,
+        None,
+        Some(bib),
+        dir,
+        json!({"op":"get","job_id":id}),
+    )
+    .unwrap();
+    for _ in 0..60 {
+        match out["job"]["status"].as_str() {
+            Some("done") => return out,
+            Some("awaiting_human") => {
+                let pedido = match gate_pendiente(&out) {
+                    Some(g) if g["kind"] == "plan" => {
+                        json!({"op":"decision","job_id":id,"gate_id":g["id"],"approve":true})
+                    }
+                    _ => {
+                        json!({"op":"answer","job_id":id,"answers":respuestas(&round_questions(&out))})
+                    }
+                };
+                out = procesar_con(db, repo, m, None, Some(bib), dir, pedido).unwrap();
+            }
+            _ => {
+                out = procesar_con(
+                    db,
+                    repo,
+                    m,
+                    None,
+                    Some(bib),
+                    dir,
+                    json!({"op":"advance","job_id":id}),
+                )
+                .unwrap()
+            }
+        }
+    }
+    panic!("la investigación no cerró: {}", out["job"]["status"]);
+}
+
+#[test]
+fn un_plan_legado_sin_alcance_se_carga_como_corpus_y_se_comporta_como_antes() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("legado-state.sqlite");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let dir = path.with_extension("legado-artifacts");
+    let m = modelo(false, false);
+    let s = procesar(&db, &repo, &m, None, &dir, pedido_create(json!({}))).unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    // Fila escrita por una versión anterior: `plan_json` sin `alcance` ni
+    // `bibliotecas`. Tiene que seguir cargando, como corpus.
+    {
+        let conn = rusqlite::Connection::open(&state).unwrap();
+        let legado = json!({"step":0,"collections":["c-conflicto"],"model":null,"modalidad":null})
+            .to_string();
+        conn.execute(
+            "UPDATE jobs SET plan_json=?1 WHERE id=?2",
+            rusqlite::params![legado, id],
+        )
+        .unwrap();
+    }
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let out = correr_con_bib(&db, &repo, &m, &bib, &dir, &id);
+    assert_eq!(out["job"]["status"], "done");
+    let evidencia = artefacto(&out, "archive")["evidence"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!evidencia.is_empty());
+    assert!(
+        evidencia
+            .iter()
+            .all(|e| e["provenance"] == "entropia_chunk"),
+        "{evidencia:?}"
+    );
+    // El alcance por defecto es corpus: la pierna bibliográfica ni se consultó.
+    assert_eq!(bib.consultas.load(std::sync::atomic::Ordering::SeqCst), 0);
+    for q in eventos(&out, "query") {
+        assert_eq!(q["payload"]["scope"], "corpus", "{q}");
+    }
+}
+
+#[test]
+fn el_alcance_ambos_intercala_corpus_y_bibliografia_por_rango() {
+    let path = common::crear_corpus_sintetico();
+    common::agregar_chunks(
+        &path,
+        "c-conflicto",
+        2,
+        "la huelga general continuó en las calles",
+    );
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("ambos-artifacts");
+    let m = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"alcance":"ambos","bibliotecas":["user:123"]})),
+    )
+    .unwrap();
+    // El alcance y las bibliotecas quedan congelados en los artefactos.
+    assert_eq!(artefacto(&s, "request")["alcance"], "ambos");
+    assert_eq!(artefacto(&s, "request")["bibliotecas"], json!(["user:123"]));
+    assert_eq!(artefacto(&s, "coverage")["alcance"], "ambos");
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let out = correr_con_bib(&db, &repo, &m, &bib, &dir, &id);
+    let evidencia = artefacto(&out, "archive_source")["evidence"]
+        .as_array()
+        .unwrap()
+        .clone();
+    // El intercalado por rango: corpus, biblioteca, corpus, biblioteca… La
+    // replan agrega la consulta «asamblea», que solo aporta corpus al final.
+    let ids: Vec<&str> = evidencia
+        .iter()
+        .map(|e| e["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.len() >= 5, "{evidencia:?}");
+    assert!(ids[0].starts_with("chunk-"), "posición 0: {}", ids[0]);
+    assert_eq!(ids[1], "bib:user:123:cap-3");
+    assert!(ids[2].starts_with("chunk-"), "posición 2: {}", ids[2]);
+    assert_eq!(ids[3], "bib:user:123:par-2");
+    assert!(ids[4].starts_with("chunk-"), "posición 4: {}", ids[4]);
+    assert!(
+        ids[5..].iter().all(|id| id.starts_with("chunk-")),
+        "el resto es corpus: {ids:?}"
+    );
+    for q in eventos(&out, "query") {
+        assert_eq!(q["payload"]["scope"], "ambos", "{q}");
+    }
+}
+
+#[test]
+fn el_trabajo_solo_biblioteca_arranca_sin_chunks_de_corpus_y_cita_paginas() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("biblioteca-artifacts");
+    let m = modelo(false, false);
+    // c-volantes no tiene chunks procesados: la puerta del corpus no aplica
+    // cuando el alcance del trabajo no lo usa.
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"alcance":"biblioteca","bibliotecas":["user:123"],"collection_ids":["c-volantes"]})),
+    )
+    .unwrap();
+    assert_eq!(s["job"]["status"], "running");
+    assert_eq!(artefacto(&s, "coverage")["collections"][0]["chunks"], 0);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let out = correr_con_bib(&db, &repo, &m, &bib, &dir, &id);
+    assert_eq!(out["job"]["status"], "done");
+    let evidencia = artefacto(&out, "archive")["evidence"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        evidencia
+            .iter()
+            .all(|e| e["id"].as_str().unwrap().starts_with("bib:")),
+        "{evidencia:?}"
+    );
+    let referencia = artefacto(&out, "report")["report"]["references"][0].clone();
+    assert_eq!(
+        referencia["ubicacion"],
+        json!({"tipo":"paginas","desde":3,"hasta":4}),
+        "{referencia}"
+    );
+    assert_eq!(referencia["provenance"], "zotero");
+    assert_eq!(referencia["biblioteca"], "user:123");
+    assert_eq!(referencia["item_key"], "LIBRO-A");
+    assert_eq!(referencia["autores"], "Ana González");
+    assert_eq!(referencia["anio"], 1965);
+    assert!(
+        referencia["title"].as_str().unwrap().contains("pp. 3–4"),
+        "{referencia}"
+    );
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(
+        md.contains("Historia de la huelga general · pp. 3–4"),
+        "{md}"
+    );
+}
+
+#[test]
+fn una_cita_falsa_en_un_pasaje_bibliografico_sigue_cayendo_en_ref_conflict() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("biblioteca-span-artifacts");
+    let m = modelo(true, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"alcance":"biblioteca","bibliotecas":["user:123"]})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let out = correr_con_bib(&db, &repo, &m, &bib, &dir, &id);
+    // El pasaje citado no está en el texto del pasaje bibliográfico: el span
+    // check falla contra el texto de la fila, sin cargar ningún asset.
+    let claim = artefacto(&out, "archive")["claims"][0].clone();
+    assert!(claim["quotes"][0]["span_start"].is_null(), "{claim}");
+    let j = juicio(&out);
+    assert_eq!(j["status"], "unverifiable", "{j}");
+    assert_eq!(j["error_kind"], "ref_conflict", "{j}");
+}
+
+#[test]
+fn la_evidencia_bibliografica_se_asienta_como_zotero_con_localizador() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("biblioteca-ledger-artifacts");
+    let m = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"alcance":"biblioteca","bibliotecas":["user:123"]})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let out = correr_con_bib(&db, &repo, &m, &bib, &dir, &id);
+    assert_eq!(out["job"]["status"], "done");
+    // El claim cita el pasaje paginado: la fuente del ledger es Zotero, con
+    // identidad por item_key y el localizador de la ubicación.
+    let ledger = entropia_agent::dominio::Ledger::nuevo(&db);
+    let fuente = ledger
+        .fuente_por_external_id(entropia_agent::dominio::ClaseFuente::Zotero, "LIBRO-A")
+        .expect("la fuente bibliográfica se asienta en el ledger");
+    assert_eq!(fuente.kind, "zotero");
+    assert_eq!(fuente.chunk_id.as_deref(), Some("cap-3"));
+    assert_eq!(fuente.locator.as_deref(), Some("3-4"));
+    assert!(ledger.fuente_tiene_texto(&fuente.id));
+    // El tipo de ubicación queda en la fila guardada de la evidencia.
+    let fila = artefacto(&out, "archive")["evidence"][0].clone();
+    assert_eq!(fila["ubicacion"]["tipo"], "paginas", "{fila}");
+}
+
+#[test]
+fn el_alcance_bibliografico_sin_bibliotecas_se_rechaza_al_crear() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("biblioteca-create-artifacts");
+    let m = modelo(false, false);
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let crear =
+        |extra: Value| procesar_con(&db, &repo, &m, None, Some(&bib), &dir, pedido_create(extra));
+    let err = crear(json!({"alcance":"biblioteca"})).unwrap_err();
+    assert!(err.contains("biblioteca"), "{err}");
+    assert!(crear(json!({"alcance":"biblioteca","bibliotecas":[]})).is_err());
+    assert!(crear(json!({"alcance":"ambos","bibliotecas":["user:123","user:123"]})).is_err());
+    assert!(crear(json!({"alcance":"ambos","bibliotecas":["  "]})).is_err());
+    assert!(crear(json!({"alcance":"ambos","bibliotecas":["user:123"]})).is_ok());
+    // «both» es el alias de robustez de «ambos».
+    assert!(crear(json!({"alcance":"both","bibliotecas":["user:123"]})).is_ok());
 }

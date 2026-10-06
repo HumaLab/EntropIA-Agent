@@ -20,6 +20,7 @@ pub mod embeddings;
 pub mod especialistas;
 pub mod estado;
 pub mod fechas;
+pub mod fuente_bibliografica;
 pub mod grafo;
 pub mod informe;
 pub mod informe_render;

@@ -340,3 +340,73 @@ impl entropia_agent::cliente_llm::ClienteLlm for LlmGuionado {
         ))
     }
 }
+
+/// Doble de fuente bibliográfica: dos pasajes fijos —uno por páginas (3–4) y
+/// uno por párrafos (2)— que responden por coincidencia literal de la consulta
+/// en el texto del pasaje. Sirve para ejercitar el alcance bibliográfico del
+/// workflow sin salir a ninguna biblioteca real.
+pub struct FuenteBibliograficaFalsa {
+    pub pasajes: Vec<entropia_agent::fuente_bibliografica::PasajeBibliografico>,
+    /// Consultas que recibió: un alcance que no necesita bibliografía no debe
+    /// llamarla, y esto lo demuestra.
+    pub consultas: std::sync::atomic::AtomicUsize,
+}
+
+impl FuenteBibliograficaFalsa {
+    pub fn nueva() -> Self {
+        use entropia_agent::fuente_bibliografica::{PasajeBibliografico, TipoUbicacion, Ubicacion};
+        Self {
+            pasajes: vec![
+                PasajeBibliografico {
+                    chunk_id: "cap-3".into(),
+                    item_key: "LIBRO-A".into(),
+                    titulo: "Historia de la huelga general".into(),
+                    autores: "Ana González".into(),
+                    anio: Some(1965),
+                    biblioteca: "user:123".into(),
+                    texto: "La huelga general de 1965 quedó registrada en las actas del libro."
+                        .into(),
+                    ubicacion: Some(Ubicacion {
+                        tipo: TipoUbicacion::Paginas,
+                        desde: 3,
+                        hasta: 4,
+                    }),
+                },
+                PasajeBibliografico {
+                    chunk_id: "par-2".into(),
+                    item_key: "LIBRO-B".into(),
+                    titulo: "Crónica del paro".into(),
+                    autores: "Benítez, Pablo".into(),
+                    anio: None,
+                    biblioteca: "user:123".into(),
+                    texto: "El segundo párrafo vuelve sobre la huelga general y sus consecuencias."
+                        .into(),
+                    ubicacion: Some(Ubicacion {
+                        tipo: TipoUbicacion::Parrafos,
+                        desde: 2,
+                        hasta: 2,
+                    }),
+                },
+            ],
+            consultas: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+impl entropia_agent::fuente_bibliografica::FuenteBibliografica for FuenteBibliograficaFalsa {
+    fn buscar(
+        &self,
+        consulta: &str,
+        limite: usize,
+    ) -> Result<Vec<entropia_agent::fuente_bibliografica::PasajeBibliografico>, String> {
+        use std::sync::atomic::Ordering;
+        self.consultas.fetch_add(1, Ordering::SeqCst);
+        Ok(self
+            .pasajes
+            .iter()
+            .filter(|p| p.texto.contains(consulta))
+            .take(limite)
+            .cloned()
+            .collect())
+    }
+}
