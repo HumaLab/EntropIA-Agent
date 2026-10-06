@@ -705,7 +705,13 @@ impl Engine<'_> {
             return Err("El alcance bibliográfico necesita al menos una biblioteca declarada (por ejemplo «user:123»)".into());
         }
         let ids: Vec<String> = decode(r["collection_ids"].clone())?;
-        if ids.is_empty() || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
+        // Colecciones únicas siempre. El recorte vacío solo se acepta con
+        // alcance biblioteca: ese trabajo nunca consulta el corpus, y pedirle
+        // colecciones sería exigirle material que no usa. Corpus y ambos
+        // siguen necesitando un recorte para poder recuperar.
+        if ids.iter().collect::<HashSet<_>>().len() != ids.len()
+            || (ids.is_empty() && alcance != Alcance::Biblioteca)
+        {
             return Err("Selecciona colecciones únicas".into());
         }
         let all = self.collections();
@@ -1603,6 +1609,11 @@ impl Engine<'_> {
     fn retrieve_lexico(&self, w: &Workflow, p: &Plan, query: &str) -> Result<Vec<Value>, String> {
         let fts = fts5_query(query);
         if fts.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Sin colecciones seleccionadas no hay recorte que filtrar: el alcance
+        // biblioteca nunca llega acá, pero un `IN ()` vacío rompería el SQL.
+        if w.collections.is_empty() {
             return Ok(Vec::new());
         }
         let marcas = (0..w.collections.len())

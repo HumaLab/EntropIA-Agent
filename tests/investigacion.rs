@@ -3623,3 +3623,74 @@ fn el_alcance_bibliografico_sin_bibliotecas_se_rechaza_al_crear() {
     // «both» es el alias de robustez de «ambos».
     assert!(crear(json!({"alcance":"both","bibliotecas":["user:123"]})).is_ok());
 }
+
+#[test]
+fn el_trabajo_solo_biblioteca_sin_colecciones_corre_y_cita_un_pasaje() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("biblioteca-sin-colecciones-artifacts");
+    let m = modelo(false, false);
+    // El alcance bibliográfico nunca consulta el corpus: la lista de
+    // colecciones puede venir vacía y el trabajo se crea igual.
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(
+            json!({"alcance":"biblioteca","bibliotecas":["user:123"],"collection_ids":[]}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(s["job"]["status"], "running");
+    // La cobertura queda con el recorte vacío, sin inventar colecciones.
+    assert_eq!(artefacto(&s, "coverage")["collections"], json!([]));
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let out = correr_con_bib(&db, &repo, &m, &bib, &dir, &id);
+    assert_eq!(out["job"]["status"], "done");
+    // Toda la evidencia es bibliográfica: ni un chunk del corpus.
+    let evidencia = artefacto(&out, "archive")["evidence"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(!evidencia.is_empty(), "{evidencia:?}");
+    assert!(
+        evidencia
+            .iter()
+            .all(|e| e["id"].as_str().unwrap().starts_with("bib:")),
+        "{evidencia:?}"
+    );
+    for q in eventos(&out, "query") {
+        assert_eq!(q["payload"]["scope"], "biblioteca", "{q}");
+    }
+    assert!(bib.consultas.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    // Y el informe cita el pasaje bibliográfico.
+    let referencia = artefacto(&out, "report")["report"]["references"][0].clone();
+    assert_eq!(referencia["biblioteca"], "user:123", "{referencia}");
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(md.contains("Historia de la huelga general"), "{md}");
+}
+
+#[test]
+fn el_recorte_vacio_sigue_rechazandose_en_corpus_y_ambos() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("recorte-vacio-artifacts");
+    let m = modelo(false, false);
+    let bib = common::FuenteBibliograficaFalsa::nueva();
+    let crear =
+        |extra: Value| procesar_con(&db, &repo, &m, None, Some(&bib), &dir, pedido_create(extra));
+    // Sin colecciones no hay corpus que recuperar: los alcances que lo usan
+    // siguen exigiendo un recorte.
+    assert!(crear(json!({"collection_ids":[]})).is_err());
+    assert!(crear(json!({"alcance":"corpus","collection_ids":[]})).is_err());
+    assert!(
+        crear(json!({"alcance":"ambos","bibliotecas":["user:123"],"collection_ids":[]})).is_err()
+    );
+    // Las colecciones repetidas tampoco pasan, ni siquiera en biblioteca.
+    assert!(crear(json!({"alcance":"biblioteca","bibliotecas":["user:123"],"collection_ids":["c-conflicto","c-conflicto"]})).is_err());
+}
