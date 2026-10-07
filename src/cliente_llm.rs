@@ -12,7 +12,33 @@ pub struct ClienteLlmOpenRouter {
     client: reqwest::blocking::Client,
     api_key: String,
     model: String,
+    chat_url: String,
+    /// Esperas entre reintentos: `esperas[i]` vale para el intento `i` que
+    /// falló. La cantidad de intentos es `esperas.len() + 1`.
+    esperas: Vec<Duration>,
+    timeout: Duration,
     ultimo_costo: std::cell::Cell<Option<f64>>,
+    reintentos: std::cell::Cell<i64>,
+}
+
+/// Ajustes de red del cliente: timeout total, esperas entre reintentos y
+/// endpoint. El default reproduce la conducta de producción —180 s, tres
+/// intentos con 2 s y 6 s de espera—; los tests lo acortan para no dormir.
+#[derive(Clone)]
+pub struct AjustesRed {
+    pub timeout: Duration,
+    pub esperas: Vec<Duration>,
+    pub chat_url: String,
+}
+
+impl Default for AjustesRed {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(180),
+            esperas: vec![Duration::from_secs(2), Duration::from_secs(6)],
+            chat_url: ClienteLlmOpenRouter::CHAT_URL.to_string(),
+        }
+    }
 }
 
 impl ClienteLlmOpenRouter {
@@ -23,25 +49,46 @@ impl ClienteLlmOpenRouter {
     pub const MODELO_DEFAULT: &'static str = "openai/gpt-5.6-luna-pro";
 
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::con_ajustes(api_key, model, AjustesRed::default())
+    }
+
+    /// Constructor con los ajustes de red a la vista: timeout, esperas de
+    /// reintento y endpoint (los tests apuntan a un servidor falso).
+    pub fn con_ajustes(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        ajustes: AjustesRed,
+    ) -> Self {
         Self {
             client: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(180))
+                .timeout(ajustes.timeout)
                 .build()
                 .unwrap_or_default(),
             api_key: api_key.into(),
             model: model.into(),
+            chat_url: ajustes.chat_url,
+            esperas: ajustes.esperas,
+            timeout: ajustes.timeout,
             ultimo_costo: std::cell::Cell::new(None),
+            reintentos: std::cell::Cell::new(0),
         }
     }
 
     /// Un turno del agente con herramientas. Recibe el historial completo y
     /// las definiciones de herramientas; devuelve texto final o llamadas.
+    ///
+    /// Los fallos transitorios —timeout, corte de conexión, estados 429/5xx,
+    /// cuerpo vacío o ilegible— se reintenan hasta agotar las esperas
+    /// configuradas; los estados 400/401/402/403/404 se devuelven de
+    /// inmediato, porque otro intento daría lo mismo. El mensaje final dice
+    /// qué pasó de verdad y cuántos intentos se hicieron.
     pub fn turno_agente(
         &self,
         mensajes: &[Value],
         herramientas: &[Value],
     ) -> Result<TurnoAgente, String> {
         self.ultimo_costo.set(None);
+        self.reintentos.set(0);
         let mut request = json!({
             "model": self.model,
             "messages": mensajes,
@@ -53,30 +100,93 @@ impl ClienteLlmOpenRouter {
             request["tool_choice"] = json!("auto");
         }
 
-        let response = self
+        let mut fallo: Option<(String, Option<Duration>)> = None;
+        for intento in 0..=self.esperas.len() {
+            if intento > 0 {
+                self.reintentos.set(self.reintentos.get() + 1);
+                // `Retry-After` (solo en 429) pisa la espera programada.
+                let espera = fallo
+                    .as_ref()
+                    .and_then(|(_, propia)| *propia)
+                    .unwrap_or(self.esperas[intento - 1]);
+                std::thread::sleep(espera);
+            }
+            match self.intento(&request) {
+                ResultadoIntento::Listo(turno) => return Ok(turno),
+                ResultadoIntento::Fatal(motivo) => return Err(motivo),
+                ResultadoIntento::Transitorio { motivo, espera } => {
+                    fallo = Some((motivo, espera));
+                }
+            }
+        }
+        let intentos = self.esperas.len() + 1;
+        let motivo = fallo
+            .map(|(motivo, _)| motivo)
+            .unwrap_or_else(|| "Fallo transitorio de OpenRouter".to_string());
+        Err(format!("{motivo} tras {intentos} intentos"))
+    }
+
+    /// Un intento completo del turno: envío, lectura del cuerpo y parseo.
+    fn intento(&self, request: &Value) -> ResultadoIntento {
+        let response = match self
             .client
-            .post(Self::CHAT_URL)
+            .post(&self.chat_url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("HTTP-Referer", "https://hlab.com.ar/")
             .header("X-Title", "EntropIA")
-            .json(&request)
+            .json(request)
             .send()
-            .map_err(|e| format!("Error de conexión con OpenRouter: {e}"))?;
+        {
+            Ok(response) => response,
+            Err(e) => return Self::fallo_envio(&e, self.timeout),
+        };
 
         let status = response.status();
         if !status.is_success() {
+            // `Retry-After` se honra solo en 429, y nunca más de 30 s.
+            let espera = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(|s| Duration::from_secs(s.min(30)));
             let cuerpo = response.text().unwrap_or_default();
-            return Err(format!("OpenRouter devolvió el estado {status}: {cuerpo}"));
+            let motivo = format!("OpenRouter devolvió el estado {status}: {cuerpo}");
+            return if Self::reintentable(status) {
+                let espera = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    espera
+                } else {
+                    None
+                };
+                ResultadoIntento::Transitorio { motivo, espera }
+            } else {
+                ResultadoIntento::Fatal(motivo)
+            };
         }
 
         // Algunos proveedores anteceden bytes no UTF-8 al JSON; se localiza el
         // primer '{' y se descarta el prefijo.
-        let bytes = response
-            .bytes()
-            .map_err(|e| format!("No se pudo leer la respuesta de OpenRouter: {e}"))?;
+        let bytes = match response.bytes() {
+            Ok(bytes) => bytes,
+            Err(e) => return Self::fallo_cuerpo(&e, self.timeout),
+        };
         let inicio = bytes.iter().position(|&b| b == b'{').unwrap_or(0);
-        let parsed: Value = serde_json::from_slice(&bytes[inicio..])
-            .map_err(|e| format!("No se pudo leer la respuesta de OpenRouter: {e}"))?;
+        let parsed: Value = match serde_json::from_slice(&bytes[inicio..]) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                // Cuerpo vacío o ilegible: el proveedor contestó cualquier
+                // cosa y otra tentativa puede tener más suerte.
+                let motivo = if bytes.is_empty() {
+                    "OpenRouter devolvió un cuerpo vacío".to_string()
+                } else {
+                    format!("No se pudo leer la respuesta de OpenRouter: {e}")
+                };
+                return ResultadoIntento::Transitorio {
+                    motivo,
+                    espera: None,
+                };
+            }
+        };
         self.ultimo_costo.set(
             parsed["usage"]["cost"]
                 .as_f64()
@@ -101,13 +211,70 @@ impl ClienteLlmOpenRouter {
                 })
                 .collect();
             if !llamadas.is_empty() {
-                return Ok(TurnoAgente::Herramientas(llamadas));
+                return ResultadoIntento::Listo(TurnoAgente::Herramientas(llamadas));
             }
         }
 
         let texto = mensaje["content"].as_str().unwrap_or("").trim().to_string();
-        Ok(TurnoAgente::Texto(texto))
+        ResultadoIntento::Listo(TurnoAgente::Texto(texto))
     }
+
+    /// Estados que se reintenan: saturación o mantenimiento del proveedor.
+    fn reintentable(status: reqwest::StatusCode) -> bool {
+        matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+    }
+
+    /// Motivo de un fallo de envío. El timeout y el corte se distinguen porque
+    /// el historiador tiene derecho a saber cuál de los dos pasó.
+    fn fallo_envio(e: &reqwest::Error, timeout: Duration) -> ResultadoIntento {
+        let motivo = if e.is_timeout() {
+            format!(
+                "OpenRouter no respondió a tiempo (más de {} s)",
+                timeout.as_secs()
+            )
+        } else if e.is_connect() {
+            format!("No se pudo conectar con OpenRouter: {e}")
+        } else {
+            format!("Error de conexión con OpenRouter: {e}")
+        };
+        if e.is_timeout() || e.is_connect() {
+            ResultadoIntento::Transitorio {
+                motivo,
+                espera: None,
+            }
+        } else {
+            ResultadoIntento::Fatal(motivo)
+        }
+    }
+
+    /// Motivo de un fallo leyendo el cuerpo: la respuesta empezó a llegar y no
+    /// terminó. El timeout total puede caer acá mismo, con el cuerpo a medio
+    /// leer, y entonces el motivo sigue siendo el tiempo.
+    fn fallo_cuerpo(e: &reqwest::Error, timeout: Duration) -> ResultadoIntento {
+        let motivo = if e.is_timeout() {
+            format!(
+                "OpenRouter no respondió a tiempo (más de {} s)",
+                timeout.as_secs()
+            )
+        } else {
+            format!("La conexión con OpenRouter se cortó al leer la respuesta: {e}")
+        };
+        ResultadoIntento::Transitorio {
+            motivo,
+            espera: None,
+        }
+    }
+}
+
+/// Resultado de un intento de turno: lo que decide el bucle de reintentos.
+enum ResultadoIntento {
+    Listo(TurnoAgente),
+    /// Se puede volver a probar; `espera` pisa la espera programada.
+    Transitorio {
+        motivo: String,
+        espera: Option<Duration>,
+    },
+    Fatal(String),
 }
 
 /// Resultado de un turno del agente: texto final o llamadas a herramientas.
@@ -143,6 +310,11 @@ pub trait ClienteLlm {
     fn ultimo_costo(&self) -> Option<f64> {
         None
     }
+
+    /// Reintentos de red consumidos por la última llamada; 0 si no hubo.
+    fn ultimo_reintentos(&self) -> i64 {
+        0
+    }
 }
 
 impl ClienteLlm for ClienteLlmOpenRouter {
@@ -160,5 +332,9 @@ impl ClienteLlm for ClienteLlmOpenRouter {
 
     fn ultimo_costo(&self) -> Option<f64> {
         self.ultimo_costo.get()
+    }
+
+    fn ultimo_reintentos(&self) -> i64 {
+        self.reintentos.get()
     }
 }

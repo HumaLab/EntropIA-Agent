@@ -479,7 +479,9 @@ impl ClienteLlm for BoundedModel {
                 text.len()
             );
             self.archive_inputs.borrow_mut().push(text.to_owned());
-            if self.garbage_next.replace(false) {
+            // La basura es pegajosa: la reparación del contrato también
+            // falla, que es lo que ejercita este guion.
+            if self.garbage_next.get() {
                 return Ok(TurnoAgente::Texto("NOT-JSON{{{".into()));
             }
             if self.fail_next.replace(false) {
@@ -3693,4 +3695,426 @@ fn el_recorte_vacio_sigue_rechazandose_en_corpus_y_ambos() {
     );
     // Las colecciones repetidas tampoco pasan, ni siquiera en biblioteca.
     assert!(crear(json!({"alcance":"biblioteca","bibliotecas":["user:123"],"collection_ids":["c-conflicto","c-conflicto"]})).is_err());
+}
+
+/// Modelo que envuelve la salida de cada rol en una valla de código, como la
+/// que devolvió gemma en el incidente del archivo: el contrato llegó como
+/// «```json … ```» y el parser estricto lo perdió entero, dejó el lote sin
+/// claims y el informe dijo que no había evidencia.
+struct ConVallas {
+    base: Model,
+}
+impl ClienteLlm for ConVallas {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        match self.base.turno_agente(m, t)? {
+            // El verificador se parsea con su propio contrato, fuera de acá.
+            TurnoAgente::Texto(s)
+                if !m[0]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Sos el Verificador") =>
+            {
+                Ok(TurnoAgente::Texto(format!("```json\n{s}\n```")))
+            }
+            otro => Ok(otro),
+        }
+    }
+}
+
+#[test]
+fn las_salidas_de_rol_envueltas_en_vallas_se_leen_igual() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("vallas-artifacts");
+    let m = ConVallas {
+        base: modelo(false, false),
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr_con(&db, &repo, &m, None, &dir, &id);
+    assert_eq!(out["job"]["status"], "done");
+    // El lote vallado se leyó: el archivo trae claims y el informe cita.
+    let archivo = artefacto(&out, "archive");
+    assert!(
+        !archivo["claims"].as_array().unwrap().is_empty(),
+        "el lote de archivo quedó sin claims: {archivo}"
+    );
+    let informe = artefacto(&out, "report");
+    assert!(
+        !informe["report"]["references"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "el informe no citó ninguna fuente: {informe}"
+    );
+    let invalidas: Vec<&Value> = eventos(&out, "role_warning")
+        .into_iter()
+        .filter(|e| {
+            e["payload"]["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Salida inválida")
+        })
+        .collect();
+    assert!(
+        invalidas.is_empty(),
+        "la valla no es una salida inválida: {invalidas:?}"
+    );
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(
+        md.contains("## Fuentes citadas"),
+        "sin fuentes citadas el lote vallado se perdió:\n{md}"
+    );
+}
+
+/// Modelo que reporta reintentos de red, como los del cliente de OpenRouter
+/// tras un 503 o un corte de conexión.
+struct ConReintentos {
+    base: Model,
+    reintentos: i64,
+}
+impl ClienteLlm for ConReintentos {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn ultimo_reintentos(&self) -> i64 {
+        self.reintentos
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        self.base.turno_agente(m, t)
+    }
+}
+
+#[test]
+fn los_reintentos_del_cliente_quedan_en_llm_calls() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("reintentos-state.sqlite");
+    let dir = path.with_extension("reintentos-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let m = ConReintentos {
+        base: modelo(false, false),
+        reintentos: 2,
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    let conn = rusqlite::Connection::open(&state).unwrap();
+    let reintentos: Vec<i64> = conn
+        .prepare("SELECT reintentos FROM llm_calls WHERE job_id=?1 ORDER BY rowid")
+        .unwrap()
+        .query_map([&id], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!reintentos.is_empty());
+    assert!(reintentos.iter().all(|&n| n == 2), "{reintentos:?}");
+}
+
+/// Modelo con deriva de contrato en prospeccion: la respuesta no cumple el
+/// contrato del rol y lo que hace después depende del modo. El resto de los
+/// roles los responde `Model`.
+struct ModeloDeriva {
+    base: Model,
+    /// Envuelve el contrato bajo una única clave (el caso gemma).
+    envuelto: bool,
+    /// Tras la reparación vuelve a fallar en vez de corregirse.
+    insiste: bool,
+    llamadas: Cell<usize>,
+}
+impl ClienteLlm for ModeloDeriva {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        let s = m[0]["content"].as_str().unwrap();
+        if s.contains("Rol: prospeccion.") {
+            let n = self.llamadas.get();
+            self.llamadas.set(n + 1);
+            let valido = json!({"sufficient":true,"rationale":"Juicio sobre el alcance documental","gaps":[]});
+            let salida = if self.envuelto {
+                // El contrato correcto, pero envuelto bajo una sola clave.
+                json!({"prospeccion": valido})
+            } else if n == 0 {
+                // Deriva con claves inventadas: falta `sufficient`.
+                json!({"suficiente":true,"motivo":"Deriva del contrato","huecos":[]})
+            } else if self.insiste {
+                json!({"suficiente":false,"motivo":"Sigo fuera de contrato","huecos":[]})
+            } else {
+                valido
+            };
+            return Ok(TurnoAgente::Texto(salida.to_string()));
+        }
+        self.base.turno_agente(m, t)
+    }
+}
+
+fn deriva(envuelto: bool, insiste: bool) -> ModeloDeriva {
+    ModeloDeriva {
+        base: modelo(false, false),
+        envuelto,
+        insiste,
+        llamadas: Cell::new(0),
+    }
+}
+
+#[test]
+fn una_salida_envuelta_en_una_clave_se_parsea_sin_llamada_extra() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("envuelta-artifacts");
+    let m = deriva(true, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+    assert_eq!(
+        artefacto(&out, "prospection"),
+        json!({"sufficient":true,"rationale":"Juicio sobre el alcance documental","gaps":[]})
+    );
+    assert_eq!(
+        out["job"]["llm_calls"], 1,
+        "el envoltorio no es una llamada más"
+    );
+    assert!(eventos(&out, "role_warning").is_empty(), "{out}");
+}
+
+#[test]
+fn una_salida_fuera_de_contrato_se_repara_con_una_llamada_mas() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("reparada-artifacts");
+    let m = deriva(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+    assert_eq!(
+        artefacto(&out, "prospection"),
+        json!({"sufficient":true,"rationale":"Juicio sobre el alcance documental","gaps":[]}),
+        "la reparación tiene que devolver el contrato"
+    );
+    assert_eq!(
+        out["job"]["llm_calls"], 2,
+        "la reparación es una llamada más"
+    );
+    assert!(eventos(&out, "role_warning").is_empty(), "{out}");
+}
+
+#[test]
+fn si_la_reparacion_tambien_falla_el_rol_cae_en_su_default() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("reincidente-artifacts");
+    let m = deriva(false, true);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+    assert_eq!(
+        out["job"]["llm_calls"], 2,
+        "una sola reparación, ni una más"
+    );
+    assert!(
+        eventos(&out, "role_warning")
+            .iter()
+            .any(|e| e["payload"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Salida inválida de prospeccion")),
+        "{out}"
+    );
+}
+
+#[test]
+fn sin_presupuesto_no_hay_reparacion() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("sin-presupuesto-artifacts");
+    let m = deriva(false, true);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"max_llm_calls":1})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+    assert_eq!(
+        out["job"]["llm_calls"], 1,
+        "la reparación no entra en el presupuesto"
+    );
+    assert_eq!(
+        m.llamadas.get(),
+        1,
+        "al modelo no le llegó el pedido de reparación"
+    );
+    assert!(
+        eventos(&out, "role_warning")
+            .iter()
+            .any(|e| e["payload"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Salida inválida de prospeccion")),
+        "{out}"
+    );
+}
+
+/// Modelo congelado en el workflow del job (plan_json de la tabla jobs).
+fn modelo_del_workflow(state: &std::path::Path, id: &str) -> Value {
+    let conn = rusqlite::Connection::open(state).unwrap();
+    let plan: String = conn
+        .query_row("SELECT plan_json FROM jobs WHERE id=?1", [id], |r| r.get(0))
+        .unwrap();
+    serde_json::from_str::<Value>(&plan).unwrap()["model"].clone()
+}
+
+#[test]
+fn el_modelo_del_pedido_se_congela_al_crear() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("modelo-state.sqlite");
+    let dir = path.with_extension("modelo-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let m = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"modelo":"openai/gpt-5.6-luna-pro"})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        modelo_del_workflow(&state, &id),
+        json!("openai/gpt-5.6-luna-pro"),
+        "el modelo se congela al crear, no al primer advance"
+    );
+    // Queda declarado en los artefactos, como el alcance.
+    assert_eq!(
+        artefacto(&s, "request")["modelo"],
+        json!("openai/gpt-5.6-luna-pro")
+    );
+    assert_eq!(
+        artefacto(&s, "coverage")["modelo"],
+        json!("openai/gpt-5.6-luna-pro")
+    );
+    // El alias `model` también lo fija.
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"model":"otro/modelo-2"})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(modelo_del_workflow(&state, &id), json!("otro/modelo-2"));
+}
+
+#[test]
+fn avanzar_con_un_modelo_distinto_sigue_rechazandose() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("modelo-otro-state.sqlite");
+    let dir = path.with_extension("modelo-otro-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let m = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"modelo":"openai/gpt-5.6-luna-pro"})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    // El cliente corre con «scripted»: no es el modelo del trabajo.
+    let error = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("El modelo cambió respecto del snapshot del job"),
+        "{error}"
+    );
+}
+
+#[test]
+fn sin_modelo_el_workflow_se_congela_en_el_primer_advance() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("modelo-legacy-state.sqlite");
+    let dir = path.with_extension("modelo-legacy-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(modelo_del_workflow(&state, &id), Value::Null);
+    step(&db, &repo, &m, &dir, &id);
+    assert_eq!(modelo_del_workflow(&state, &id), json!("scripted"));
+}
+
+#[test]
+fn un_modelo_invalido_se_rechaza_al_crear() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("modelo-invalido-artifacts");
+    let m = modelo(false, false);
+    for invalido in [
+        json!(""),
+        json!("   "),
+        json!("x".repeat(201)),
+        json!("modelo raro!"),
+        json!(42),
+    ] {
+        let error = procesar(
+            &db,
+            &repo,
+            &m,
+            None,
+            &dir,
+            pedido_create(json!({"modelo":invalido})),
+        )
+        .unwrap_err();
+        assert!(error.contains("modelo del trabajo"), "{error}");
+    }
+    // El alias pasa por el mismo filtro.
+    let error = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"model":"sin!validar"})),
+    )
+    .unwrap_err();
+    assert!(error.contains("modelo del trabajo"), "{error}");
 }

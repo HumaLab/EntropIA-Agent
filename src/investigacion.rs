@@ -753,13 +753,44 @@ impl Engine<'_> {
             )
         };
         let snapshot = self.repo.snapshot_corpus()?;
-        let id=self.transaction(|| {
-            let job=MotorTrabajos::nuevo(self.db).crear_job(ConfigJob{modo:"research".into(),pregunta:question.into(),project:project.into(),corpus:"desktop".into(),config_snapshot:json!({"denylist":self.repo.denylist(),"role_contract":1}).to_string(),corpus_snapshot_id:Some(snapshot),max_cost:cost,max_llm_calls:Some(calls)})?;
-            self.save(&job.id,&Workflow{step:0,collections:ids,model:None,modalidad:Some(perfil.id.into()),alcance,bibliotecas:bibliotecas.clone()})?;
-            self.artifact(&job.id,"request",&json!({"title":title,"question":question,"project":project,"context":r.get("context"),"max_llm_calls":calls,"max_cost":cost,"modalidad":perfil.id,"modalidad_nombre":perfil.nombre,"alcance":alcance.as_str(),"bibliotecas":bibliotecas.clone()}),false)?;
-            self.artifact(&job.id,"coverage",&json!({"collections":selected,"warning":"La cobertura de indexación no demuestra suficiencia temática","alcance":alcance.as_str(),"bibliotecas":bibliotecas}),false)?;
-            self.status(&job.id,"running")?;
-            self.event(&job.id,"created",json!({}))?;
+        // Modelo del trabajo pedido por el investigador. Ausente → se congela
+        // en el primer advance, como siempre; presente → se congela acá y lo
+        // exige el guardián de advance. Sin modelo pedido los artefactos no
+        // cambian ni un byte.
+        let modelo = modelo_del_pedido(r)?;
+        let mut request = json!({"title":title,"question":question,"project":project,"context":r.get("context"),"max_llm_calls":calls,"max_cost":cost,"modalidad":perfil.id,"modalidad_nombre":perfil.nombre,"alcance":alcance.as_str(),"bibliotecas":bibliotecas.clone()});
+        let mut coverage = json!({"collections":selected,"warning":"La cobertura de indexación no demuestra suficiencia temática","alcance":alcance.as_str(),"bibliotecas":bibliotecas.clone()});
+        if let Some(m) = &modelo {
+            request["modelo"] = json!(m);
+            coverage["modelo"] = json!(m);
+        }
+        let id = self.transaction(|| {
+            let job = MotorTrabajos::nuevo(self.db).crear_job(ConfigJob {
+                modo: "research".into(),
+                pregunta: question.into(),
+                project: project.into(),
+                corpus: "desktop".into(),
+                config_snapshot: json!({"denylist":self.repo.denylist(),"role_contract":1})
+                    .to_string(),
+                corpus_snapshot_id: Some(snapshot),
+                max_cost: cost,
+                max_llm_calls: Some(calls),
+            })?;
+            self.save(
+                &job.id,
+                &Workflow {
+                    step: 0,
+                    collections: ids,
+                    model: modelo.clone(),
+                    modalidad: Some(perfil.id.into()),
+                    alcance,
+                    bibliotecas: bibliotecas.clone(),
+                },
+            )?;
+            self.artifact(&job.id, "request", &request, false)?;
+            self.artifact(&job.id, "coverage", &coverage, false)?;
+            self.status(&job.id, "running")?;
+            self.event(&job.id, "created", json!({}))?;
             Ok(job.id)
         })?;
         self.snapshot(&id, false)
@@ -976,20 +1007,22 @@ impl Engine<'_> {
         Ok(None)
     }
 
-    /// Cierra el registro y acumula el costo reportado por el proveedor.
+    /// Cierra el registro, acumula el costo reportado por el proveedor y
+    /// asienta los reintentos de red que consumió la llamada.
     fn cerrar_llamada(
         &self,
         id: &str,
         call: &str,
         error: Option<&String>,
         cost: Option<f64>,
+        reintentos: i64,
     ) -> Result<(), String> {
         self.transaction(|| {
             self.db
                 .conn()
                 .execute(
-                    "UPDATE llm_calls SET error=?1,costo=?2 WHERE id=?3",
-                    params![error, cost, call],
+                    "UPDATE llm_calls SET error=?1,costo=?2,reintentos=?3 WHERE id=?4",
+                    params![error, cost, reintentos, call],
                 )
                 .map_err(err)?;
             if let Some(cost) = cost {
@@ -1046,6 +1079,7 @@ impl Engine<'_> {
             &[],
         );
         let cost = self.llm.ultimo_costo();
+        let reintentos = self.llm.ultimo_reintentos();
         if let Ok(TurnoAgente::Texto(raw)) = &response {
             self.transaction(|| {
                 self.artifact(
@@ -1057,15 +1091,29 @@ impl Engine<'_> {
                 Ok(())
             })?;
         }
+        // La llamada se cierra antes de parsear: la reparación es una llamada
+        // más y el presupuesto la tiene que ver con esta ya saldada, no con un
+        // costo todavía desconocido. El error que asienta es el de transporte:
+        // una salida que no cumple el contrato no es un error de la llamada.
+        self.cerrar_llamada(id, &call, response.as_ref().err(), cost, reintentos)?;
         let parsed = match response {
-            Ok(TurnoAgente::Texto(s)) => match serde_json::from_str::<T>(&s) {
+            Ok(TurnoAgente::Texto(s)) => match decodificar_salida::<T>(&s) {
                 Ok(value) => Ok(value),
                 Err(e) => {
-                    let warning = format!("Salida inválida de {role}: {e}");
-                    self.transaction(|| {
-                        self.event(id, "role_warning", json!({"role":role,"error":warning}))
-                    })?;
-                    Ok(T::default())
+                    // Una sola reparación: si la respuesta corregida tampoco
+                    // cumple, el rol cae en su default con el error de la
+                    // salida original.
+                    match self.reparar_salida::<T>(id, role, contract, &input["data"], &s, &e) {
+                        Ok(Some(value)) => Ok(value),
+                        Ok(None) => {
+                            let warning = format!("Salida inválida de {role}: {e}");
+                            self.transaction(|| {
+                                self.event(id, "role_warning", json!({"role":role,"error":warning}))
+                            })?;
+                            Ok(T::default())
+                        }
+                        Err(fallo) => Err(fallo),
+                    }
                 }
             },
             Ok(_) => {
@@ -1076,8 +1124,50 @@ impl Engine<'_> {
             }
             Err(e) => Err(e),
         };
-        self.cerrar_llamada(id, &call, parsed.as_ref().err(), cost)?;
         parsed
+    }
+
+    /// Pide UNA reparación cuando la salida del rol no cumple el contrato: la
+    /// misma receta, con el contrato, el error del parser y la respuesta
+    /// anterior del modelo.
+    ///
+    /// La reparación es una llamada más —paga presupuesto como cualquier gasto
+    /// automático del agente y queda en `llm_calls`—. Sin presupuesto, o si la
+    /// respuesta corregida tampoco cumple, no hay nada que devolver y el
+    /// camino estricto conserva el error de la salida original.
+    fn reparar_salida<T: DeserializeOwned>(
+        &self,
+        id: &str,
+        role: &str,
+        contract: &str,
+        data: &Value,
+        bruto: &str,
+        error: &str,
+    ) -> Result<Option<T>, String> {
+        if self.presupuesto_agotado(id)?.is_some() {
+            return Ok(None);
+        }
+        let call = self.registrar_llamada(id, role)?;
+        let response = self.llm.turno_agente(
+            &[
+                json!({"role":"system","content":format!("{TRUST}\nRol: {role}. Contrato: {contract}")}),
+                json!({"role":"user","content":data.to_string()}),
+                json!({"role":"assistant","content":bruto}),
+                json!({"role":"user","content":format!("Tu respuesta no cumple el contrato: {error}. Contrato ({role}): {contract}. Devolvé solo el objeto JSON que cumple el contrato.")}),
+            ],
+            &[],
+        );
+        let cost = self.llm.ultimo_costo();
+        let reintentos = self.llm.ultimo_reintentos();
+        let reparada = match response {
+            Ok(TurnoAgente::Texto(s)) => decodificar_salida::<T>(&s).ok(),
+            _ => None,
+        };
+        let error = reparada
+            .is_none()
+            .then(|| format!("la reparación de {role} tampoco cumplió el contrato"));
+        self.cerrar_llamada(id, &call, error.as_ref(), cost, reintentos)?;
+        Ok(reparada)
     }
 
     fn advance(&self, id: &str, w: &mut Workflow) -> Result<(), String> {
@@ -2305,7 +2395,8 @@ impl Engine<'_> {
                         Some(&cobertura),
                     );
                     let costo = self.llm.ultimo_costo();
-                    self.cerrar_llamada(id, &call, r.as_ref().err(), costo)?;
+                    let reintentos = self.llm.ultimo_reintentos();
+                    self.cerrar_llamada(id, &call, r.as_ref().err(), costo, reintentos)?;
                     r?
                 }
                 Err(_) => {
@@ -2416,8 +2507,149 @@ fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| format!("Falta {key}"))
 }
+/// Modelo del trabajo pedido al crearlo: identificador opaco del proveedor
+/// («openai/gpt-5.6-luna-pro») de hasta 200 caracteres, de letras, dígitos y
+/// `. _ : / -`. El campo `model` es alias de `modelo`. Ausente → `None` y el
+/// modelo se congela en el primer advance, como siempre.
+fn modelo_del_pedido(r: &Value) -> Result<Option<String>, String> {
+    let crudo = r
+        .get("modelo")
+        .filter(|v| !v.is_null())
+        .or_else(|| r.get("model").filter(|v| !v.is_null()));
+    let Some(v) = crudo else {
+        return Ok(None);
+    };
+    let m = v.as_str().map(str::trim).ok_or_else(|| {
+        "El modelo del trabajo se nombra con un texto de hasta 200 caracteres (letras, dígitos y . _ : / -)"
+            .to_string()
+    })?;
+    if m.is_empty() {
+        return Err("El modelo del trabajo no puede quedar vacío".into());
+    }
+    if m.chars().count() > 200 {
+        return Err("El modelo del trabajo no puede superar los 200 caracteres".into());
+    }
+    if !m
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-'))
+    {
+        return Err(format!(
+            "El modelo del trabajo «{m}» tiene caracteres inválidos: se admiten letras, dígitos y . _ : / -"
+        ));
+    }
+    Ok(Some(m.to_string()))
+}
 fn decode<T: DeserializeOwned>(v: Value) -> Result<T, String> {
     serde_json::from_value(v).map_err(err)
+}
+/// Convierte la salida de un rol en su contrato.
+///
+/// Además del extractor tolerante, admite la deriva de envoltorio: el objeto
+/// del contrato colgando de una única clave («{"plan":{…}}»), que es la deriva
+/// que trajo gemma. Un solo nivel; cualquier otra cosa va a reparación.
+fn decodificar_salida<T: DeserializeOwned>(bruto: &str) -> Result<T, String> {
+    let valor =
+        extraer_json(bruto).ok_or_else(|| "la salida no contiene JSON recuperable".to_string())?;
+    let error = match decode::<T>(valor.clone()) {
+        Ok(v) => return Ok(v),
+        Err(e) => e,
+    };
+    let envuelto = valor
+        .as_object()
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.values().next());
+    if let Some(v) = envuelto.filter(|v| v.is_object()) {
+        if let Ok(v) = decode::<T>(v.clone()) {
+            return Ok(v);
+        }
+    }
+    Err(error)
+}
+/// Extrae el primer valor JSON de la salida de un rol.
+///
+/// Los modelos envuelven el contrato en una valla de código (```json …```)
+/// o lo rodean de prosa; el contrato se lee igual. Devuelve `None` cuando no
+/// queda ningún valor JSON recuperable, y recién ahí la salida se declara
+/// inválida y el rol cae a su default.
+fn extraer_json(bruto: &str) -> Option<Value> {
+    let s = bruto.trim();
+    if let Ok(v) = serde_json::from_str::<Value>(s) {
+        return Some(v);
+    }
+    let cuerpo = cuerpo_de_valla(s).trim();
+    if let Ok(v) = serde_json::from_str::<Value>(cuerpo) {
+        return Some(v);
+    }
+    primer_json_balanceado(cuerpo)
+}
+/// Cuerpo de la primera valla de código de `s`, o `s` entero si no hay valla.
+/// La etiqueta del lenguaje (```json) vive en la línea de apertura y se
+/// descarta con ella.
+fn cuerpo_de_valla(s: &str) -> &str {
+    let Some(apertura) = s.find("```") else {
+        return s;
+    };
+    let tras_marca = &s[apertura + 3..];
+    let Some(fin_linea) = tras_marca.find('\n') else {
+        return tras_marca;
+    };
+    let cuerpo = &tras_marca[fin_linea + 1..];
+    match cuerpo.find("```") {
+        Some(cierre) => &cuerpo[..cierre],
+        None => cuerpo,
+    }
+}
+/// Primer objeto o arreglo JSON balanceado de `texto`. Es el camino cuando el
+/// modelo rodea el contrato de prosa suelta, sin valla: la llave que abre
+/// puede no ser la del contrato, así que un candidato que no parsea se
+/// descarta y se sigue buscando.
+fn primer_json_balanceado(texto: &str) -> Option<Value> {
+    let bytes = texto.as_bytes();
+    for inicio in 0..bytes.len() {
+        if bytes[inicio] != b'{' && bytes[inicio] != b'[' {
+            continue;
+        }
+        if let Some(fin) = cierre_balanceado(bytes, inicio) {
+            if let Ok(v) = serde_json::from_str::<Value>(&texto[inicio..fin]) {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+/// Índice final (exclusivo) del valor que abre en `inicio`. Las llaves dentro
+/// de cadenas —y los escapes de comillas— no cuentan para el balance.
+fn cierre_balanceado(bytes: &[u8], inicio: usize) -> Option<usize> {
+    let mut pila: Vec<u8> = vec![bytes[inicio]];
+    let mut en_cadena = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate().skip(inicio + 1) {
+        if en_cadena {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                en_cadena = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => en_cadena = true,
+            b'{' | b'[' => pila.push(b),
+            b'}' | b']' => {
+                let abierto = pila.pop()?;
+                if (abierto == b'{') != (b == b'}') {
+                    return None;
+                }
+                if pila.is_empty() {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 /// Cliente nulo: fuerza al verificador a su camino determinista cuando el
 /// presupuesto del job se agotó. La verificación no se saltea, se degrada.
@@ -2857,4 +3089,48 @@ fn split_archive_evidence(evidence: Vec<Value>) -> Result<Vec<Value>, String> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extrae_el_cuerpo_de_una_valla_con_etiqueta() {
+        let salida = "```json\n{\"a\":1}\n```";
+        assert_eq!(extraer_json(salida), Some(json!({"a":1})));
+    }
+
+    #[test]
+    fn extrae_el_cuerpo_de_una_valla_sin_etiqueta() {
+        let salida = "```\n{\"a\":1}\n```";
+        assert_eq!(extraer_json(salida), Some(json!({"a":1})));
+    }
+
+    #[test]
+    fn tolera_prosa_alrededor_de_la_valla() {
+        let salida = "Listo, acá está el objeto:\n```JSON\n{\"a\":1}\n```\nEspero que sirva.";
+        assert_eq!(extraer_json(salida), Some(json!({"a":1})));
+    }
+
+    #[test]
+    fn tolera_prosa_alrededor_del_objeto_suelto() {
+        let salida = "El resultado es {\"a\":1} y nada más.";
+        assert_eq!(extraer_json(salida), Some(json!({"a":1})));
+    }
+
+    #[test]
+    fn las_llaves_dentro_de_cadenas_no_cierran_el_objeto() {
+        let salida = "Mirá: {no es json} pero esto sí {\"texto\":\"con } y { adentro\",\"n\":1}";
+        assert_eq!(
+            extraer_json(salida),
+            Some(json!({"texto":"con } y { adentro","n":1}))
+        );
+    }
+
+    #[test]
+    fn sin_json_recuperable_no_hay_candidato() {
+        assert_eq!(extraer_json("NOT-JSON{{{"), None);
+        assert_eq!(extraer_json("```json\nNOT-JSON\n```"), None);
+    }
 }
