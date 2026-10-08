@@ -2382,13 +2382,14 @@ impl Engine<'_> {
                 ModoVerificacion::Factual
             };
             let mut modelo = self.llm.modelo().to_string();
+            let mut aviso = None;
             let resultado = match self.abrir_llamada(id, "asistente_validador") {
                 Ok(call) => {
                     self.transaction(|| {
                         self.artifact(id,"input_asistente_validador",&json!({"claim":claim.text,"quotes":claim.quotes,"modo":format!("{modo:?}")}),false)?;
                         Ok(())
                     })?;
-                    let r = Verificador::nuevo(self.llm).verificar(
+                    let r = Verificador::nuevo(self.llm).verificar_con_aviso(
                         &claim.text,
                         &lote,
                         modo,
@@ -2397,7 +2398,9 @@ impl Engine<'_> {
                     let costo = self.llm.ultimo_costo();
                     let reintentos = self.llm.ultimo_reintentos();
                     self.cerrar_llamada(id, &call, r.as_ref().err(), costo, reintentos)?;
-                    r?
+                    let (resultado, aviso_llm) = r?;
+                    aviso = aviso_llm;
+                    resultado
                 }
                 Err(_) => {
                     sin_presupuesto = true;
@@ -2411,6 +2414,18 @@ impl Engine<'_> {
                     )?
                 }
             };
+            // El modelo respondió pero su salida no dio veredicto legible: el
+            // juicio salió del fallback, y el trabajo lo declara igual que las
+            // demás degradaciones de rol.
+            if let Some(mensaje) = aviso {
+                self.transaction(|| {
+                    self.event(
+                        id,
+                        "role_warning",
+                        json!({"role":"asistente_validador","claim":claim.id,"error":mensaje}),
+                    )
+                })?;
+            }
             if let Some(ledger_id) = &claim.ledger_id {
                 // `registrar_verificacion` abre su propia transacción: anidarla
                 // dentro del SAVEPOINT del motor rompe con «cannot start a
@@ -2571,7 +2586,7 @@ fn decodificar_salida<T: DeserializeOwned>(bruto: &str) -> Result<T, String> {
 /// o lo rodean de prosa; el contrato se lee igual. Devuelve `None` cuando no
 /// queda ningún valor JSON recuperable, y recién ahí la salida se declara
 /// inválida y el rol cae a su default.
-fn extraer_json(bruto: &str) -> Option<Value> {
+pub(crate) fn extraer_json(bruto: &str) -> Option<Value> {
     let s = bruto.trim();
     if let Ok(v) = serde_json::from_str::<Value>(s) {
         return Some(v);

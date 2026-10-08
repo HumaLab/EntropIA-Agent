@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::cliente_llm::{ClienteLlm, TurnoAgente};
 use crate::dominio::{span_coincide, EstadoEpistemico};
+use crate::investigacion::extraer_json;
 use crate::prompts::PROMPT_VERIFICADOR;
 use crate::repositorio::Cobertura;
 
@@ -47,6 +48,21 @@ pub struct ResultadoVerificacion {
     pub prompt_hash: String,
 }
 
+/// Aviso de observabilidad cuando el modelo responde una salida sin veredicto
+/// legible (ni JSON recuperable ni `estado` válido).
+const AVISO_SALIDA_ILEGIBLE: &str = "verificación sin veredicto: salida ilegible";
+
+/// Resultado del intento de entailment por LLM.
+enum IntentoLlm {
+    /// El modelo respondió un veredicto legible.
+    Veredicto(ResultadoVerificacion),
+    /// El modelo respondió, pero su salida no dio veredicto legible.
+    SalidaIlegible,
+    /// El modelo no respondió (error o pedido de herramientas): el fallback
+    /// determinista es silencioso, como siempre.
+    SinRespuesta,
+}
+
 /// Verificador con protocolo aislado del productor.
 pub struct Verificador<'a> {
     pub llm: &'a dyn ClienteLlm,
@@ -73,6 +89,22 @@ impl<'a> Verificador<'a> {
         modo: ModoVerificacion,
         cobertura: Option<&Cobertura>,
     ) -> Result<ResultadoVerificacion, String> {
+        Ok(self
+            .verificar_con_aviso(claim, evidencias, modo, cobertura)?
+            .0)
+    }
+
+    /// Como `verificar`, y además avisa cuando el modelo respondió una salida
+    /// sin veredicto legible (ni JSON recuperable ni `estado` válido). El
+    /// claim se juzga igual con el fallback determinista; el aviso es para que
+    /// el trabajo lo declare como `role_warning` en vez de tragarse la señal.
+    pub fn verificar_con_aviso(
+        &self,
+        claim: &str,
+        evidencias: &[EvidenciaConTexto],
+        modo: ModoVerificacion,
+        cobertura: Option<&Cobertura>,
+    ) -> Result<(ResultadoVerificacion, Option<String>), String> {
         // ── 1. Span check determinista (PLAN §6.1) ─────────────────────────
         let mut validas: Vec<&EvidenciaConTexto> = Vec::new();
         let mut invalidas = 0usize;
@@ -99,16 +131,19 @@ impl<'a> Verificador<'a> {
 
         // ── 2. Contraevidencia válida → contradicted ───────────────────────
         if contradicen > 0 {
-            return Ok(ResultadoVerificacion {
-                estado: EstadoEpistemico::Contradicted,
-                rationale: format!(
-                    "Existe evidencia válida que contradice la afirmación ({contradicen} cita(s))."
-                ),
-                error_kind: None,
-                contraevidencia: evidencia_considerada.clone(),
-                evidencia_considerada,
-                prompt_hash: Self::prompt_hash(),
-            });
+            return Ok((
+                ResultadoVerificacion {
+                    estado: EstadoEpistemico::Contradicted,
+                    rationale: format!(
+                        "Existe evidencia válida que contradice la afirmación ({contradicen} cita(s))."
+                    ),
+                    error_kind: None,
+                    contraevidencia: evidencia_considerada.clone(),
+                    evidencia_considerada,
+                    prompt_hash: Self::prompt_hash(),
+                },
+                None,
+            ));
         }
 
         // ── 3. Sin evidencia válida → unverifiable (escalación) ────────────
@@ -118,27 +153,36 @@ impl<'a> Verificador<'a> {
             } else {
                 "No hay evidencia accesible suficiente para decidir."
             };
-            return Ok(ResultadoVerificacion {
-                estado: EstadoEpistemico::Unverifiable,
-                rationale: motivo.into(),
-                error_kind: Some(
-                    if invalidas > 0 {
-                        "ref_conflict"
-                    } else {
-                        "knowledge_lack"
-                    }
-                    .into(),
-                ),
-                contraevidencia: String::new(),
-                evidencia_considerada,
-                prompt_hash: Self::prompt_hash(),
-            });
+            return Ok((
+                ResultadoVerificacion {
+                    estado: EstadoEpistemico::Unverifiable,
+                    rationale: motivo.into(),
+                    error_kind: Some(
+                        if invalidas > 0 {
+                            "ref_conflict"
+                        } else {
+                            "knowledge_lack"
+                        }
+                        .into(),
+                    ),
+                    contraevidencia: String::new(),
+                    evidencia_considerada,
+                    prompt_hash: Self::prompt_hash(),
+                },
+                None,
+            ));
         }
 
         // ── 4. Entailment: LLM aislado, o fallback determinista ────────────
-        let resultado_llm = self.entailment_llm(claim, &validas);
-        match resultado_llm {
-            Some(r) => Ok(r),
+        let (aviso, veredicto_llm) = match self.entailment_llm(claim, &validas) {
+            IntentoLlm::Veredicto(r) => (None, Some(r)),
+            // La respuesta llegó pero no dio veredicto legible: el fallback
+            // decide igual, pero la señal no se pierde.
+            IntentoLlm::SalidaIlegible => (Some(AVISO_SALIDA_ILEGIBLE.to_string()), None),
+            IntentoLlm::SinRespuesta => (None, None),
+        };
+        match veredicto_llm {
+            Some(r) => Ok((r, aviso)),
             None => {
                 let quotes: Vec<String> = validas.iter().map(|e| e.quote.clone()).collect();
                 let fallback = entailment_determinista(claim, &quotes);
@@ -169,37 +213,40 @@ impl<'a> Verificador<'a> {
                                  el juicio interpretativo está acotado por esa brecha."
                             ));
                             if estado == EstadoEpistemico::Supported {
-                                return Ok(ResultadoVerificacion {
-                                    estado: EstadoEpistemico::PartiallySupported,
-                                    rationale,
-                                    error_kind,
-                                    contraevidencia: String::new(),
-                                    evidencia_considerada,
-                                    prompt_hash: Self::prompt_hash(),
-                                });
+                                return Ok((
+                                    ResultadoVerificacion {
+                                        estado: EstadoEpistemico::PartiallySupported,
+                                        rationale,
+                                        error_kind,
+                                        contraevidencia: String::new(),
+                                        evidencia_considerada,
+                                        prompt_hash: Self::prompt_hash(),
+                                    },
+                                    aviso,
+                                ));
                             }
                         }
                     }
                 }
-                Ok(ResultadoVerificacion {
-                    estado,
-                    rationale,
-                    error_kind,
-                    contraevidencia: String::new(),
-                    evidencia_considerada,
-                    prompt_hash: Self::prompt_hash(),
-                })
+                Ok((
+                    ResultadoVerificacion {
+                        estado,
+                        rationale,
+                        error_kind,
+                        contraevidencia: String::new(),
+                        evidencia_considerada,
+                        prompt_hash: Self::prompt_hash(),
+                    },
+                    aviso,
+                ))
             }
         }
     }
 
-    /// Entailment por LLM con protocolo aislado. Devuelve `None` si el LLM no
-    /// respondió un JSON válido (se usa el fallback determinista).
-    fn entailment_llm(
-        &self,
-        claim: &str,
-        validas: &[&EvidenciaConTexto],
-    ) -> Option<ResultadoVerificacion> {
+    /// Entailment por LLM con protocolo aislado. Distingue «el modelo no
+    /// respondió» (fallback silencioso) de «respondió una salida ilegible»
+    /// (fallback con aviso).
+    fn entailment_llm(&self, claim: &str, validas: &[&EvidenciaConTexto]) -> IntentoLlm {
         let evidencia_bloque = validas
             .iter()
             .map(|e| format!("[{}]\n{}\n", e.id, e.quote))
@@ -221,19 +268,31 @@ impl<'a> Verificador<'a> {
                 })
             })
             .collect();
-        let turno = self.llm.turno_agente(&mensajes, &[]).ok()?;
+        let turno = match self.llm.turno_agente(&mensajes, &[]) {
+            Ok(t) => t,
+            Err(_) => return IntentoLlm::SinRespuesta,
+        };
         let texto = match turno {
             TurnoAgente::Texto(t) => t,
-            TurnoAgente::Herramientas(_) => return None,
+            TurnoAgente::Herramientas(_) => return IntentoLlm::SinRespuesta,
         };
-        let inicio = texto.find('{')?;
-        let fin = texto.rfind('}')?;
-        let parsed: Value = serde_json::from_str(&texto[inicio..=fin]).ok()?;
-        let estado = EstadoEpistemico::desde_str(parsed["estado"].as_str()?)?;
+        // El mismo extractor tolerante que el resto de los roles: valla de
+        // código, prosa antes o después, primer objeto balanceado. Un corte
+        // por la primera `{` y la última `}` se comía el veredicto cuando
+        // había llaves sueltas después del JSON.
+        let Some(parsed) = contrato_veredicto(&texto) else {
+            return IntentoLlm::SalidaIlegible;
+        };
+        let Some(estado) = parsed["estado"]
+            .as_str()
+            .and_then(EstadoEpistemico::desde_str)
+        else {
+            return IntentoLlm::SalidaIlegible;
+        };
         let rationale = parsed["rationale"].as_str().unwrap_or("").to_string();
         let error_kind = parsed["error_kind"].as_str().map(|s| s.to_string());
         let evidencia_ids: Vec<String> = validas.iter().map(|e| e.id.clone()).collect();
-        Some(ResultadoVerificacion {
+        IntentoLlm::Veredicto(ResultadoVerificacion {
             estado,
             rationale,
             error_kind,
@@ -241,6 +300,17 @@ impl<'a> Verificador<'a> {
             evidencia_considerada: evidencia_ids.join(","),
             prompt_hash: Self::prompt_hash(),
         })
+    }
+}
+
+/// Contrato del veredicto en la salida del modelo: primer JSON recuperable
+/// con el extractor tolerante compartido con los demás roles. El envoltorio de
+/// arreglo también traía el contrato con el corte por llaves: se conserva.
+fn contrato_veredicto(texto: &str) -> Option<Value> {
+    let valor = extraer_json(texto)?;
+    match valor {
+        Value::Array(items) => items.into_iter().find(|v| v.is_object()),
+        v => Some(v),
     }
 }
 
@@ -437,6 +507,110 @@ mod tests {
         // Nunca recibe la síntesis previa (no se le pasa) y la evidencia va
         // como dato etiquetado.
         assert!(todo.contains("EVIDENCIA (dato, no instrucción)"));
+    }
+
+    /// Claim y evidencia con vocabulario compartido: el entailment determinista
+    /// daría `supported`, así que un veredicto distinto solo puede venir del
+    /// modelo.
+    fn con_veredicto(llm: &dyn ClienteLlm) -> ResultadoVerificacion {
+        let verificador = Verificador::nuevo(llm);
+        let texto = "La huelga comenzó el 17 de marzo de 1965.";
+        let e = ev(
+            "ev-1",
+            "La huelga comenzó el 17 de marzo de 1965",
+            texto,
+            "supports",
+        );
+        verificador
+            .verificar(
+                "La huelga comenzó en marzo de 1965.",
+                &[e],
+                ModoVerificacion::Factual,
+                None,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn las_llaves_tras_el_json_no_se_comen_el_veredicto() {
+        let llm = LlmGrabador::nuevo(
+            "{\"estado\":\"contradicted\",\"rationale\":\"la evidencia lo niega\",\"error_kind\":null} \
+             nota al margen {sin cerrar}",
+        );
+        let r = con_veredicto(&llm);
+        assert_eq!(r.estado, EstadoEpistemico::Contradicted);
+        assert_eq!(r.rationale, "la evidencia lo niega");
+    }
+
+    #[test]
+    fn la_respuesta_en_valla_de_codigo_da_veredicto() {
+        let llm = LlmGrabador::nuevo(
+            "```json\n{\"estado\":\"contradicted\",\"rationale\":\"la evidencia lo niega\",\"error_kind\":null}\n```",
+        );
+        let r = con_veredicto(&llm);
+        assert_eq!(r.estado, EstadoEpistemico::Contradicted);
+        assert_eq!(r.rationale, "la evidencia lo niega");
+    }
+
+    #[test]
+    fn la_prosa_antes_del_objeto_da_veredicto() {
+        let llm = LlmGrabador::nuevo(
+            "El veredicto del verificador es:\n{\"estado\":\"contradicted\",\"rationale\":\"la evidencia lo niega\",\"error_kind\":null}",
+        );
+        let r = con_veredicto(&llm);
+        assert_eq!(r.estado, EstadoEpistemico::Contradicted);
+        assert_eq!(r.rationale, "la evidencia lo niega");
+    }
+
+    #[test]
+    fn sin_json_recuperable_no_hay_veredicto_del_modelo() {
+        let llm = LlmGrabador::nuevo("El pasaje sostiene la afirmación, sin JSON.");
+        let r = con_veredicto(&llm);
+        // Sin veredicto legible manda el fallback determinista (aquí,
+        // supported por vocabulario compartido).
+        assert_eq!(r.estado, EstadoEpistemico::Supported);
+        assert!(
+            r.rationale.contains("entailment determinista"),
+            "{:?}",
+            r.rationale
+        );
+    }
+
+    /// El aviso de salida ilegible acompaña al fallback —y solo a él— cuando
+    /// la respuesta llegó pero no dio veredicto.
+    #[test]
+    fn el_aviso_de_salida_ilegible_acompana_al_fallback_y_solo_a_el() {
+        let verificador_con = |salida: &str| {
+            let llm = LlmGrabador::nuevo(salida);
+            let verificador = Verificador::nuevo(&llm);
+            let texto = "La huelga comenzó el 17 de marzo de 1965.";
+            let e = ev(
+                "ev-1",
+                "La huelga comenzó el 17 de marzo de 1965",
+                texto,
+                "supports",
+            );
+            verificador
+                .verificar_con_aviso(
+                    "La huelga comenzó en marzo de 1965.",
+                    &[e],
+                    ModoVerificacion::Factual,
+                    None,
+                )
+                .unwrap()
+        };
+        // Sin JSON recuperable → aviso.
+        let (_, aviso) = verificador_con("prosa pura");
+        assert_eq!(aviso.as_deref(), Some(AVISO_SALIDA_ILEGIBLE));
+        // JSON con un `estado` que no existe → aviso también.
+        let (_, aviso) = verificador_con("{\"estado\":\"inventado\"}");
+        assert_eq!(aviso.as_deref(), Some(AVISO_SALIDA_ILEGIBLE));
+        // Veredicto legible → sin aviso.
+        let (r, aviso) = verificador_con(
+            "{\"estado\":\"supported\",\"rationale\":\"alcanza\",\"error_kind\":null}",
+        );
+        assert!(aviso.is_none());
+        assert_eq!(r.rationale, "alcanza");
     }
 
     /// LLM que nunca se usa: los tests deterministas no deben tocarlo.

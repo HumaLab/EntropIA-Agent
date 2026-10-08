@@ -212,7 +212,7 @@ fn destrabar(
 fn correr(
     db: &EstadoDb,
     repo: &RepositorioSqlite,
-    m: &Model,
+    m: &dyn ClienteLlm,
     dir: &std::path::Path,
     id: &str,
 ) -> Value {
@@ -1549,6 +1549,60 @@ fn el_presupuesto_agotado_degrada_la_verificacion_en_vez_de_saltearla() {
                 .as_str()
                 .unwrap()
                 .contains("presupuesto agotado")));
+}
+
+/// Modelo cuyo verificador responde una salida ilegible (prosa sin JSON):
+/// el resto de los roles delegan en `Model`.
+struct VerificadorIlegible {
+    base: Model,
+}
+impl ClienteLlm for VerificadorIlegible {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        let sistema = m[0]["content"].as_str().unwrap();
+        if sistema.contains("Sos el Verificador de EntropIA.") {
+            return Ok(TurnoAgente::Texto(
+                "El pasaje sostiene la afirmación, pero no devuelvo JSON.".into(),
+            ));
+        }
+        self.base.turno_agente(m, t)
+    }
+}
+
+#[test]
+fn una_salida_ilegible_del_verificador_se_declara_sin_veredicto() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("ilegible-artifacts");
+    let m = VerificadorIlegible {
+        base: modelo(false, false),
+    };
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr(&db, &repo, &m, &dir, &id);
+    // El claim se juzga igual, con el entailment determinista…
+    let j = juicio(&out);
+    assert!(j["status"].is_string(), "{j}");
+    // …pero la señal no se pierde: el trabajo declara que el modelo no dio
+    // veredicto legible.
+    assert!(
+        out["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "role_warning"
+                && e["payload"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("verificación sin veredicto")),
+        "{out}"
+    );
 }
 
 #[test]
