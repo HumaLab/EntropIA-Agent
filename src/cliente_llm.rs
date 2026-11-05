@@ -202,8 +202,11 @@ impl ClienteLlmOpenRouter {
                 .filter(|v| v.is_finite() && *v >= 0.0),
         );
 
-        self.ultimo_fin
-            .replace(parsed["choices"][0]["finish_reason"].as_str().map(str::to_string));
+        self.ultimo_fin.replace(
+            parsed["choices"][0]["finish_reason"]
+                .as_str()
+                .map(str::to_string),
+        );
         let mensaje = &parsed["choices"][0]["message"];
         if let Some(tool_calls) = mensaje["tool_calls"].as_array() {
             let llamadas: Vec<Llamada> = tool_calls

@@ -61,7 +61,8 @@ embeddings, y el evento registra lo pedido en lugar de lo efectivo.
 - El evento `query` guarda `"limit": p.retrieval_limit` (`src/investigacion.rs:1073`).
 - `PLAN.md:635-636` ya lo anota como deuda; no hay registro de por qué 16.
 - Toda la evidencia recuperada pasa al asistente de archivo en lotes de 48 KB, y cada
-  lote es una llamada al modelo (`src/investigacion.rs:1300-1313`). No hay tope total.
+  lote es una llamada al modelo (hasta tres, con insumos de 48, 24 y 12 KB, si la
+  respuesta vuelve vacía, cortada o ilegible) (`src/investigacion.rs:1300-1313`). No hay tope total.
 - Medido en `entropia.sqlite`: 1648 chunks en 17 colecciones, de ~800 bytes (mediana
   816, máximo 944). En modo léxico, con límite 100 por colección y 17 colecciones, una
   investigación puede recuperar **el corpus entero** (~45 lotes), justo en el modo de

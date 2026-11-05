@@ -341,8 +341,7 @@ fn un_403_por_limite_de_la_clave_da_un_mensaje_claro_sin_la_url() {
     // El cuerpo real que recibió el historiador, con la URL de gestión de la
     // clave: no tiene que llegar a la pantalla.
     let cuerpo = json!({"error":{"message":"Key limit exceeded (monthly limit). Manage it using https://openrouter.ai/workspaces/default/keys/249bbaf6 $5.00 of $5.00 used; resets 2026-12-01T00:00:00.000Z.","code":403,"metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise or remove the key limit"}}}).to_string();
-    let servidor =
-        ServidorFalso::nuevo(vec![Guion::Completa(respuesta("403 Forbidden", &cuerpo))]);
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta("403 Forbidden", &cuerpo))]);
     let cliente =
         ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
     let error = error_de(turno(&cliente));

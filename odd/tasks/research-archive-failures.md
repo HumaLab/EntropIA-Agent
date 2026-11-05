@@ -16,11 +16,11 @@ Goal: the run should not fail; when it does, show a clear message and a retry bu
 ## Tasks
 
 - T1 [S1-S4] Monitor the live run and record each failure in the Log. Route: parent inline, read-only. Commit: none.
-- T2a [S1, S2] Client: read `finish_reason`, raise the output cap from 4096 to 16384 tokens. Route: inline, test-first (tests/cliente_llm.rs). Commit: pending.
-- T2b [S1, S2] Engine: classify a truncated or empty answer with a clear error and skip the pointless repair; on archive failure, retry the same offset with half the input (48 KB, 24 KB, 12 KB). Route: inline, test-first (tests/investigacion.rs). Commit: pending.
-- T3 [S1, S3, S5] Engine: a batch that still fails after the split writes no checkpoint and pauses the run with a clear `research_error`; Resume retries it. Route: inline, test-first. Commit: pending.
+- T2a [S1, S2] Client: read `finish_reason`, raise the output cap from 4096 to 16384 tokens. Route: inline, test-first (tests/cliente_llm.rs). Commit: aa3bd98.
+- T2b [S1, S2] Engine: classify a truncated or empty answer with a clear error and skip the pointless repair; on archive failure, retry the same offset with half the input (48 KB, 24 KB, 12 KB). Route: gentle-ai-worker (context backstop), test-first (tests/investigacion.rs). Commit: see L14.
+- T3 [S1, S3, S5] Engine: a batch that still fails after the split writes no checkpoint and pauses the run with a clear `research_error`; Resume retries it. Route: gentle-ai-worker, same unit as T2b. Commit: see L14.
 - T4 [S2, S3] Desktop (EntropIA-Pro-Lite, outside this repo): clear error and a retry button modeled on `retry_batch`. Route: deferred by S6. Commit: none.
-- T5 [S2] Client: OpenRouter 403 key limit becomes a clear message without the raw JSON or key URL. Route: inline, test-first, same unit as T2a. Commit: pending.
+- T5 [S2] Client: OpenRouter 403 key limit becomes a clear message without the raw JSON or key URL. Route: inline, test-first, same unit as T2a. Commit: aa3bd98.
 
 ## Log
 
@@ -37,3 +37,4 @@ Goal: the run should not fail; when it does, show a clear message and a retry bu
 - L11 (monitor): result of this run: 4 of 5 archive batches (170 of 177 documents) had no claims; only batch 5 contributed claims (8). Archive cost US$0.035 over 11 calls, most of it spent on empty answers.
 - L12 (monitor, final report `job-9758-1072`): status `done completed`. The report lists 4 times "salida de archivo no parseable; lote registrado sin claims" and only "(asistente_archivo, 2 veces)" under "Degradación del pipeline". Cause of the under-count: in batches 1 and 3 the repair returned something that decodes as an empty `Archive` (all fields `#[serde(default)]`, for example `{}`). `reparar_salida` accepts it as a success, so no `role_warning` is emitted, and `src/investigacion.rs:1997-2003` then labels the empty batch "no parseable". The job also closes as `completed` with 96% of the evidence unread, and nothing in the final state tells the user that a retry would help.
 - L13 (user decisions): scope "Motor ahora (T2, T3, T5)"; batch policy "Pausar y ofrecer Reanudar (recomendado)". This replaces the old rule pinned by `garbage_archive_json_is_recorded_and_does_not_pause`.
+- L14 (evidence): T2b+T3 landed in the commit after `aa3bd98` on `fix/research-archive-failures`. RED observed by the worker: `una_respuesta_*` got 0 `archive_retry` events, and `un_lote_que_no_entra_*` hit `unwrap_err()` on Ok. GREEN: `cargo test` reports 198 lib tests and 80 in tests/investigacion.rs, all passing; `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean. Side effect on shared `llamar`: an empty answer from ANY role now skips the repair and reports "el modelo devolvió una respuesta vacía".
