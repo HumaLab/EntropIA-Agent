@@ -41,7 +41,8 @@ pub struct Perfil {
     pub sesgo_declarado: &'static str,
     /// Tope de consultas de un plan bajo esta modalidad. Cada consulta es una
     /// búsqueda en el corpus (embeddings y rerank), así que el tope acota
-    /// también esas llamadas.
+    /// también esas llamadas. Es el default con que el job lo congela en
+    /// `ParametrosAgente::max_consultas`; un job puede traer otra cuota.
     pub max_consultas: usize,
 }
 
@@ -124,6 +125,12 @@ pub fn por_defecto() -> &'static Perfil {
 /// Modalidades disponibles, para que la UI las ofrezca sin hardcodearlas.
 pub fn catalogo() -> Vec<(&'static str, &'static str)> {
     PERFILES.iter().map(|p| (p.id, p.nombre)).collect()
+}
+
+/// Tope de consultas del plan de cada modalidad. Es el default con que
+/// `ParametrosAgente` congela la cuota por perfil en cada job.
+pub fn cuotas() -> Vec<(&'static str, usize)> {
+    PERFILES.iter().map(|p| (p.id, p.max_consultas)).collect()
 }
 
 #[cfg(test)]

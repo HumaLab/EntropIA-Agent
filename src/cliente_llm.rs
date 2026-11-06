@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::parametros::ParametrosAgente;
+
 /// Cliente de OpenRouter.
 pub struct ClienteLlmOpenRouter {
     client: reqwest::blocking::Client,
@@ -17,6 +19,10 @@ pub struct ClienteLlmOpenRouter {
     /// falló. La cantidad de intentos es `esperas.len() + 1`.
     esperas: Vec<Duration>,
     timeout: Duration,
+    /// Tope de salida del pedido; lo decide el job (ver `ParametrosAgente`).
+    max_tokens_salida: u32,
+    /// Temperatura del pedido; la decide el job.
+    temperatura: f64,
     ultimo_costo: std::cell::Cell<Option<f64>>,
     reintentos: std::cell::Cell<i64>,
     ultimo_fin: std::cell::RefCell<Option<String>>,
@@ -59,11 +65,60 @@ impl ClienteLlmOpenRouter {
     }
 
     /// Constructor con los ajustes de red a la vista: timeout, esperas de
-    /// reintento y endpoint (los tests apuntan a un servidor falso).
+    /// reintento y endpoint (los tests apuntan a un servidor falso). Los
+    /// parámetros del agente quedan en sus defaults: mismo tope de salida y
+    /// misma temperatura que antes.
     pub fn con_ajustes(
         api_key: impl Into<String>,
         model: impl Into<String>,
         ajustes: AjustesRed,
+    ) -> Self {
+        Self::con_ajustes_y_parametros(api_key, model, ajustes, &ParametrosAgente::default())
+    }
+
+    /// Constructor con los parámetros del agente congelados por el job: tope
+    /// de salida, temperatura, timeout y esperas de reintento. El endpoint es
+    /// el de producción.
+    pub fn con_parametros(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        parametros: &ParametrosAgente,
+    ) -> Self {
+        Self::con_parametros_en(api_key, model, Self::CHAT_URL, parametros)
+    }
+
+    /// [`con_parametros`](Self::con_parametros) con el endpoint a la vista:
+    /// es el mismo seam que `AjustesRed.chat_url` para los tests, sin dejar el
+    /// tiempo muerto de un timeout de producción.
+    pub fn con_parametros_en(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        chat_url: impl Into<String>,
+        parametros: &ParametrosAgente,
+    ) -> Self {
+        Self::con_ajustes_y_parametros(
+            api_key,
+            model,
+            AjustesRed {
+                timeout: Duration::from_secs(parametros.timeout_s),
+                esperas: parametros
+                    .esperas_reintento_s
+                    .iter()
+                    .map(|s| Duration::from_secs(*s))
+                    .collect(),
+                chat_url: chat_url.into(),
+            },
+            parametros,
+        )
+    }
+
+    /// Constructor completo: la red viene de `ajustes` y la generación —tope
+    /// de salida y temperatura— de los parámetros del job.
+    pub fn con_ajustes_y_parametros(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        ajustes: AjustesRed,
+        parametros: &ParametrosAgente,
     ) -> Self {
         Self {
             client: reqwest::blocking::Client::builder()
@@ -75,6 +130,8 @@ impl ClienteLlmOpenRouter {
             chat_url: ajustes.chat_url,
             esperas: ajustes.esperas,
             timeout: ajustes.timeout,
+            max_tokens_salida: parametros.max_tokens_salida,
+            temperatura: parametros.temperatura,
             ultimo_costo: std::cell::Cell::new(None),
             reintentos: std::cell::Cell::new(0),
             ultimo_fin: std::cell::RefCell::new(None),
@@ -100,8 +157,8 @@ impl ClienteLlmOpenRouter {
         let mut request = json!({
             "model": self.model,
             "messages": mensajes,
-            "temperature": 0.3,
-            "max_tokens": Self::MAX_TOKENS_SALIDA,
+            "temperature": self.temperatura,
+            "max_tokens": self.max_tokens_salida,
         });
         if !herramientas.is_empty() {
             request["tools"] = Value::Array(herramientas.to_vec());
@@ -343,6 +400,13 @@ pub trait ClienteLlm {
     /// Modelo activo (para el snapshot de reproducibilidad del job).
     fn modelo(&self) -> &str;
 
+    /// Tope de salida con el que se le pide al modelo. El motor lo imprime en
+    /// los mensajes de una respuesta cortada o vacía, así que tiene que ser el
+    /// que el job congeló, no el default del cliente.
+    fn max_tokens_salida(&self) -> u32 {
+        ClienteLlmOpenRouter::MAX_TOKENS_SALIDA
+    }
+
     /// Costo reportado por el proveedor para el último intento; None no significa cero.
     fn ultimo_costo(&self) -> Option<f64> {
         None
@@ -371,6 +435,10 @@ impl ClienteLlm for ClienteLlmOpenRouter {
 
     fn modelo(&self) -> &str {
         &self.model
+    }
+
+    fn max_tokens_salida(&self) -> u32 {
+        self.max_tokens_salida
     }
 
     fn ultimo_costo(&self) -> Option<f64> {

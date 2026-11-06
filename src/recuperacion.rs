@@ -7,8 +7,8 @@
 //!
 //! Fase 0 (PLAN §9): los chunks se cargan **una vez por proceso** (antes
 //! `cargar_chunks()` movía 7,6 MB y 1.648 decodificaciones `Vec<f32>` en cada
-//! `buscar_fuentes`), y `limite` se acota explícitamente a `RERANK_DEPTH` en
-//! vez de topar en silencio.
+//! `buscar_fuentes`), y `limite` se acota explícitamente al `rerank_depth` del
+//! job en vez de topar en silencio.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -26,7 +26,33 @@ pub const RERANK_DEPTH: usize = 16;
 /// Constante de suavizado de RRF.
 pub const RRF_K: usize = 60;
 /// Tope de caracteres por fragmento.
-const SNIPPET_MAX: usize = 1600;
+pub(crate) const SNIPPET_MAX: usize = 1600;
+
+/// Constantes del pipeline de recuperación que el job congela en sus
+/// `ParametrosAgente`. El default reproduce los valores de producción: el
+/// flujo sin parámetros se comporta exactamente como antes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AjustesRecuperacion {
+    /// Candidatos que entran al rerank y techo del `retrieval_limit`.
+    pub rerank_depth: usize,
+    /// Candidatos por pierna (vectorial y léxica).
+    pub leg_k: usize,
+    /// Suavizado de la fusión RRF.
+    pub rrf_k: usize,
+    /// Caracteres por fragmento en el rerank y en la búsqueda léxica.
+    pub snippet_max: usize,
+}
+
+impl Default for AjustesRecuperacion {
+    fn default() -> Self {
+        Self {
+            rerank_depth: RERANK_DEPTH,
+            leg_k: LEG_K,
+            rrf_k: RRF_K,
+            snippet_max: SNIPPET_MAX,
+        }
+    }
+}
 
 /// Corpus cargado y su índice id → posición (ver `CacheChunks`).
 type CorpusCargado = (Arc<Vec<ChunkRag>>, Arc<HashMap<String, usize>>);
@@ -231,7 +257,26 @@ impl Recuperador {
         colecciones: &[String],
         limite: usize,
     ) -> Recuperacion {
-        let limite = limite.clamp(1, RERANK_DEPTH);
+        self.recuperar_en_colecciones_con(
+            repo,
+            consulta,
+            colecciones,
+            limite,
+            &AjustesRecuperacion::default(),
+        )
+    }
+
+    /// Igual que [`Recuperador::recuperar_en_colecciones`], con las constantes
+    /// del pipeline que el job congeló en sus parámetros.
+    pub fn recuperar_en_colecciones_con(
+        &self,
+        repo: &RepositorioSqlite,
+        consulta: &str,
+        colecciones: &[String],
+        limite: usize,
+        ajustes: &AjustesRecuperacion,
+    ) -> Recuperacion {
+        let limite = limite.clamp(1, ajustes.rerank_depth);
         let (chunks, indice) = {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
             match cache.obtener_o_cargar(repo, |r| r.cargar_chunks()) {
@@ -260,7 +305,7 @@ impl Recuperador {
             rerank: 0,
         };
         let vectorial = match self.embeddings.embed(consulta) {
-            Ok(q) => knn_en(&chunks, &permitidos, &q),
+            Ok(q) => knn_en_hasta(&chunks, &permitidos, &q, ajustes.leg_k),
             Err(e) => {
                 degradaciones.push(format!(
                     "recuperación sin pierna semántica ({e}): solo búsqueda léxica, \
@@ -274,16 +319,16 @@ impl Recuperador {
         // un top-K global dejaría casi nada cuando el recorte es chico.
         let en_recorte: std::collections::HashSet<usize> = permitidos.iter().copied().collect();
         let lexical: Vec<usize> = repo
-            .buscar_fts5(consulta, LEG_K * 8)
+            .buscar_fts5(consulta, ajustes.leg_k * 8)
             .iter()
             .filter_map(|id| indice.get(id).copied())
             .filter(|i| en_recorte.contains(i))
-            .take(LEG_K)
+            .take(ajustes.leg_k)
             .collect();
 
-        let top: Vec<usize> = rrf_fuse(&vectorial, &lexical)
+        let top: Vec<usize> = rrf_fuse_ponderada_con(&vectorial, &lexical, 1.0, 1.0, ajustes.rrf_k)
             .into_iter()
-            .take(RERANK_DEPTH)
+            .take(ajustes.rerank_depth)
             .map(|(i, _)| i)
             .collect();
         if top.is_empty() {
@@ -296,7 +341,7 @@ impl Recuperador {
 
         let documentos: Vec<String> = top
             .iter()
-            .map(|&i| snippet(&chunks[i].text_content, SNIPPET_MAX))
+            .map(|&i| snippet(&chunks[i].text_content, ajustes.snippet_max))
             .collect();
         llamadas.rerank = 1;
         let orden = match self.rerank.rerank(consulta, &documentos, limite) {
@@ -492,11 +537,6 @@ impl Recuperador {
 }
 
 /// kNN por similitud coseno restringido a los índices habilitados.
-fn knn_en(chunks: &[ChunkRag], permitidos: &[usize], q_emb: &[f32]) -> Vec<usize> {
-    knn_en_hasta(chunks, permitidos, q_emb, LEG_K)
-}
-
-/// `knn_en` con profundidad explícita: los `k` habilitados más cercanos.
 fn knn_en_hasta(chunks: &[ChunkRag], permitidos: &[usize], q_emb: &[f32], k: usize) -> Vec<usize> {
     let mut sim: Vec<(usize, f32)> = permitidos
         .iter()
@@ -545,6 +585,18 @@ pub fn rrf_fuse_ponderada(
     peso_vectorial: f64,
     peso_lexico: f64,
 ) -> Vec<(usize, f64)> {
+    rrf_fuse_ponderada_con(vectorial, lexical, peso_vectorial, peso_lexico, RRF_K)
+}
+
+/// [`rrf_fuse_ponderada`] con la constante de suavizado a la vista: el job
+/// congela su `rrf_k` y la fusión no puede leer otra.
+pub(crate) fn rrf_fuse_ponderada_con(
+    vectorial: &[usize],
+    lexical: &[usize],
+    peso_vectorial: f64,
+    peso_lexico: f64,
+    rrf_k: usize,
+) -> Vec<(usize, f64)> {
     // Por chunk: puntaje acumulado y mejor posición en alguna pierna.
     let mut scores: HashMap<usize, (f64, usize)> = HashMap::new();
     for (pierna, peso) in [(vectorial, peso_vectorial), (lexical, peso_lexico)] {
@@ -553,7 +605,7 @@ pub fn rrf_fuse_ponderada(
         }
         for (rank, &idx) in pierna.iter().enumerate() {
             let entrada = scores.entry(idx).or_insert((0.0, rank));
-            entrada.0 += peso / (RRF_K as f64 + rank as f64 + 1.0);
+            entrada.0 += peso / (rrf_k as f64 + rank as f64 + 1.0);
             entrada.1 = entrada.1.min(rank);
         }
     }
@@ -659,6 +711,43 @@ mod tests {
         assert!(!flujo.contains(&x));
         assert_eq!(flujo.len(), 2 * LEG_K);
         assert_eq!(flujo[..2], [200, 300]);
+    }
+
+    /// PRESERVE: `recuperar_en_colecciones` cambió para delegar en la versión
+    /// parametrizada; sin ajustes explícitos tiene que devolver exactamente lo
+    /// mismo que antes.
+    #[test]
+    fn recuperar_con_los_ajustes_por_defecto_es_la_recuperacion_de_siempre() {
+        let repo = repo_completo();
+        let r = recuperador(false, false);
+        let recorte = ["c-conflicto".to_string()];
+        let clasica = r.recuperar_en_colecciones(&repo, "huelga segundo", &recorte, RERANK_DEPTH);
+        let por_defecto = r.recuperar_en_colecciones_con(
+            &repo,
+            "huelga segundo",
+            &recorte,
+            RERANK_DEPTH,
+            &AjustesRecuperacion::default(),
+        );
+        let ids = |rec: &Recuperacion| -> Vec<String> {
+            rec.fragmentos.iter().map(|f| f.chunk_id.clone()).collect()
+        };
+        assert_eq!(ids(&clasica), ids(&por_defecto));
+        assert_eq!(clasica.degradacion, por_defecto.degradacion);
+        assert_eq!(clasica.llamadas, por_defecto.llamadas);
+    }
+
+    #[test]
+    fn recuperar_con_ajustes_propios_acota_los_fragmentos_al_rerank_depth() {
+        let repo = repo_completo();
+        let r = recuperador(false, false);
+        let recorte = ["c-conflicto".to_string()];
+        let ajustes = AjustesRecuperacion {
+            rerank_depth: 2,
+            ..AjustesRecuperacion::default()
+        };
+        let rec = r.recuperar_en_colecciones_con(&repo, "huelga segundo", &recorte, 10, &ajustes);
+        assert_eq!(rec.fragmentos.len(), 2);
     }
 
     #[test]
@@ -805,7 +894,7 @@ mod tests {
         ];
         // El más cercano de todos es `a`, pero si el recorte solo habilita el
         // índice 2, `a` no puede aparecer.
-        let cerca = knn_en(&chunks, &[2], &[1.0, 0.0]);
+        let cerca = knn_en_hasta(&chunks, &[2], &[1.0, 0.0], LEG_K);
         assert_eq!(cerca, vec![2]);
     }
 

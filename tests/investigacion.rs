@@ -4537,3 +4537,267 @@ fn un_modelo_invalido_se_rechaza_al_crear() {
     .unwrap_err();
     assert!(error.contains("modelo del trabajo"), "{error}");
 }
+
+// ── Parámetros del agente ────────────────────────────────────────────────────
+
+#[test]
+fn crear_con_parametros_invalidos_no_deja_job_ni_artefactos() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("parametros-invalidos-artifacts");
+    let m = modelo(false, false);
+
+    // Un valor fuera de rango devuelve el mensaje de la validación, tal cual.
+    let error = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"max_tokens_salida":10}})),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "max_tokens_salida debe estar entre 1024 y 131072 (recibido: 10)"
+    );
+
+    // Un campo que no existe tampoco entra, y el error dice cuáles valen.
+    let error = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"lotes_archivo":[10]}})),
+    )
+    .unwrap_err();
+    assert!(
+        error.starts_with("Parámetros del agente: campo desconocido «lotes_archivo»."),
+        "{error}"
+    );
+
+    // Ni job, ni artefactos, ni una llamada al modelo: no se escribió nada.
+    let listado = procesar(&db, &repo, &m, None, &dir, json!({"op":"list"})).unwrap();
+    assert!(listado["jobs"].as_array().unwrap().is_empty(), "{listado}");
+    assert_eq!(m.calls.get(), 0);
+
+    // Con parámetros válidos el job sí se crea.
+    let creado = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"preguntas_minimas":6}})),
+    )
+    .unwrap();
+    assert_eq!(creado["job"]["parameters"]["preguntas_minimas"], 6);
+}
+
+#[test]
+fn crear_con_parametros_los_congela_y_los_expone_en_el_snapshot() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("parametros-congelados-artifacts");
+    let m = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"lotes_archivo_bytes":[20000,10000],"fragmento_archivo_bytes":6000}})),
+    )
+    .unwrap();
+
+    // Lo que el pedido trae, congelado en el job.
+    assert_eq!(
+        s["job"]["parameters"]["lotes_archivo_bytes"],
+        json!([20000, 10000])
+    );
+    assert_eq!(s["job"]["parameters"]["fragmento_archivo_bytes"], 6000);
+    // Lo que no trae queda en el default de siempre, no en nulo.
+    assert_eq!(s["job"]["parameters"]["max_tokens_salida"], 16_384);
+    assert_eq!(s["job"]["parameters"]["temperatura"], json!(0.3));
+    assert_eq!(
+        s["job"]["parameters"]["max_consultas"],
+        json!({"cronologia":20,"general":20,"trayectorias":30})
+    );
+    // Y queda como artefacto del job, no solo en la respuesta del create.
+    assert_eq!(
+        artefacto(&s, "parameters")["lotes_archivo_bytes"],
+        json!([20000, 10000])
+    );
+}
+
+#[test]
+fn un_job_sin_parametros_expone_los_defaults_de_siempre() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("parametros-default-artifacts");
+    let m = modelo(false, false);
+    let s = create(&db, &repo, &m, &dir);
+    assert_eq!(
+        s["job"]["parameters"]["lotes_archivo_bytes"],
+        json!([48_000, 24_000, 12_000])
+    );
+    assert_eq!(s["job"]["parameters"]["fragmento_archivo_bytes"], 8_000);
+    assert_eq!(s["job"]["parameters"]["preguntas_minimas"], 4);
+    assert_eq!(s["job"]["parameters"]["rerank_depth"], 16);
+}
+
+#[test]
+fn la_escalera_de_lotes_congelada_gobierna_el_intento_y_su_reintento() {
+    let path = common::crear_corpus_sintetico();
+    corpus_con_evidencia_larga(&path);
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("escalera-propia-state.sqlite");
+    let dir = path.with_extension("escalera-propia-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let base = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &base,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"lotes_archivo_bytes":[20000,10000]}})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    prepare_plan(&db, &repo, &base, &dir, &id);
+    let model = BoundedModel {
+        base,
+        archive_inputs: Default::default(),
+        fail_next: Cell::new(false),
+        garbage_next: Cell::new(false),
+        // El primer intento vuelve vacío: el reintento tiene que usar el
+        // segundo tope de la escalera congelada, no el de siempre.
+        fallo_archivo: Cell::new(Some(FalloArchivo::Vacio)),
+        fallos_archivo: Cell::new(1),
+        fin: Default::default(),
+    };
+    let out = procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap();
+
+    assert_eq!(out["job"]["status"], "running");
+    let reintentos = eventos(&out, "archive_retry");
+    assert_eq!(reintentos.len(), 1, "{reintentos:?}");
+    assert_eq!(reintentos[0]["payload"]["budget"], 20_000);
+    let insumos = model.archive_inputs.borrow();
+    assert_eq!(insumos.len(), 2, "{insumos:?}");
+    assert!(
+        insumos[0].len() <= 20_000,
+        "el primer intento usa el primer tope: {}",
+        insumos[0].len()
+    );
+    assert!(
+        insumos[1].len() <= 10_000,
+        "el reintento usa el segundo tope: {}",
+        insumos[1].len()
+    );
+    assert!(insumos[1].len() < insumos[0].len());
+}
+
+#[test]
+fn el_piso_de_preguntas_congelado_completa_la_ronda_hasta_ese_numero() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("piso-propio-artifacts");
+    let m = Model {
+        calls: Cell::new(0),
+        invent: false,
+        block: false,
+        // El modelo aporta dos preguntas: faltan cuatro para el piso de seis.
+        questions: 2,
+        quote_falsa: false,
+        sin_pasajes: false,
+        replan_identico: false,
+    };
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"preguntas_minimas":6}})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    step(&db, &repo, &m, &dir, &id);
+    let asked = step(&db, &repo, &m, &dir, &id);
+
+    let questions = round_questions(&asked);
+    assert_eq!(questions.len(), 6, "{questions:?}");
+    let ids: std::collections::HashSet<&str> =
+        questions.iter().filter_map(|q| q["id"].as_str()).collect();
+    assert_eq!(ids.len(), 6, "los identificadores no pueden repetirse");
+    assert!(
+        eventos(&asked, "role_warning")
+            .iter()
+            .any(|e| e["payload"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("menos de 6 preguntas")),
+        "el relleno del código tiene que quedar declarado"
+    );
+}
+
+#[test]
+fn un_rerank_depth_congelado_acota_el_techo_del_plan_y_lo_recuperado() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("rerank-propio-artifacts");
+    let rec = entropia_agent::recuperacion::Recuperador::con_clientes(
+        Box::new(EmbedFijo),
+        Box::new(RerankIdentidad),
+    );
+    // El plan pide diez fragmentos por consulta: el techo congelado es dos.
+    let m = PlanPropio {
+        base: modelo(false, false),
+        plan: json!({"queries":["huelga"],"bibliography_queries":[],"retrieval_limit":10}),
+        replan: json!({"queries":["huelga","asamblea"],"bibliography_queries":[],"retrieval_limit":10}),
+    };
+    let s = procesar(
+        &db,
+        &repo,
+        &m,
+        Some(&rec),
+        &dir,
+        pedido_create(json!({"parameters":{"rerank_depth":2}})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = correr_con(&db, &repo, &m, Some(&rec), &dir, &id);
+
+    let plan = artefacto(&out, "plan");
+    assert_eq!(plan["retrieval_limit"], 2, "{plan}");
+    assert_eq!(
+        eventos(&out, "plan_adjusted")[0]["payload"],
+        json!({"field":"retrieval_limit","requested":10,"applied":2})
+    );
+    let consultas = eventos(&out, "query");
+    assert!(!consultas.is_empty());
+    for consulta in &consultas {
+        assert_eq!(consulta["payload"]["limit"], 2, "{consulta}");
+        assert!(
+            consulta["payload"]["retrieved"].as_u64().unwrap() <= 2,
+            "la recuperación entrega como mucho rerank_depth fragmentos: {consulta}"
+        );
+    }
+}

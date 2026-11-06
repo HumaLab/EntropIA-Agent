@@ -28,6 +28,7 @@ pub mod informe_secciones;
 pub mod investigacion;
 pub mod memoria;
 pub mod paper;
+pub mod parametros;
 pub mod perfiles;
 pub mod prompts;
 pub mod puerta_lectura;
