@@ -19,6 +19,7 @@ pub struct ClienteLlmOpenRouter {
     timeout: Duration,
     ultimo_costo: std::cell::Cell<Option<f64>>,
     reintentos: std::cell::Cell<i64>,
+    ultimo_fin: std::cell::RefCell<Option<String>>,
 }
 
 /// Ajustes de red del cliente: timeout total, esperas entre reintentos y
@@ -44,6 +45,11 @@ impl Default for AjustesRed {
 impl ClienteLlmOpenRouter {
     /// Endpoint de chat de OpenRouter.
     const CHAT_URL: &'static str = "https://openrouter.ai/api/v1/chat/completions";
+
+    /// Tope de salida por turno. Con 4096 el asistente de archivo se cortaba:
+    /// el razonamiento del modelo cuenta dentro del tope y un lote de 48 KB
+    /// con citas literales no entraba.
+    pub const MAX_TOKENS_SALIDA: u32 = 16_384;
 
     /// Modelo por defecto de la app EntropIA.
     pub const MODELO_DEFAULT: &'static str = "openai/gpt-5.6-luna-pro";
@@ -71,6 +77,7 @@ impl ClienteLlmOpenRouter {
             timeout: ajustes.timeout,
             ultimo_costo: std::cell::Cell::new(None),
             reintentos: std::cell::Cell::new(0),
+            ultimo_fin: std::cell::RefCell::new(None),
         }
     }
 
@@ -89,11 +96,12 @@ impl ClienteLlmOpenRouter {
     ) -> Result<TurnoAgente, String> {
         self.ultimo_costo.set(None);
         self.reintentos.set(0);
+        self.ultimo_fin.replace(None);
         let mut request = json!({
             "model": self.model,
             "messages": mensajes,
             "temperature": 0.3,
-            "max_tokens": 4096,
+            "max_tokens": Self::MAX_TOKENS_SALIDA,
         });
         if !herramientas.is_empty() {
             request["tools"] = Value::Array(herramientas.to_vec());
@@ -151,7 +159,8 @@ impl ClienteLlmOpenRouter {
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(|s| Duration::from_secs(s.min(30)));
             let cuerpo = response.text().unwrap_or_default();
-            let motivo = format!("OpenRouter devolvió el estado {status}: {cuerpo}");
+            let motivo = Self::motivo_limite_clave(status, &cuerpo)
+                .unwrap_or_else(|| format!("OpenRouter devolvió el estado {status}: {cuerpo}"));
             return if Self::reintentable(status) {
                 let espera = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                     espera
@@ -193,6 +202,11 @@ impl ClienteLlmOpenRouter {
                 .filter(|v| v.is_finite() && *v >= 0.0),
         );
 
+        self.ultimo_fin.replace(
+            parsed["choices"][0]["finish_reason"]
+                .as_str()
+                .map(str::to_string),
+        );
         let mensaje = &parsed["choices"][0]["message"];
         if let Some(tool_calls) = mensaje["tool_calls"].as_array() {
             let llamadas: Vec<Llamada> = tool_calls
@@ -217,6 +231,29 @@ impl ClienteLlmOpenRouter {
 
         let texto = mensaje["content"].as_str().unwrap_or("").trim().to_string();
         ResultadoIntento::Listo(TurnoAgente::Texto(texto))
+    }
+
+    /// Mensaje para el 403 de una clave que agotó su límite de gasto. El
+    /// cuerpo crudo trae la URL de gestión de la clave y no le dice al
+    /// historiador qué hacer; se conserva solo el detalle de consumo.
+    fn motivo_limite_clave(status: reqwest::StatusCode, cuerpo: &str) -> Option<String> {
+        if status != reqwest::StatusCode::FORBIDDEN {
+            return None;
+        }
+        let error = serde_json::from_str::<Value>(cuerpo).ok()?["error"].clone();
+        let mensaje = error["message"].as_str().unwrap_or("");
+        if error["metadata"]["limit_source"] != "openrouter_key_limit"
+            && !mensaje.starts_with("Key limit exceeded")
+        {
+            return None;
+        }
+        let detalle = mensaje
+            .find('$')
+            .map(|i| mensaje[i..].trim().trim_end_matches('.').to_string())
+            .filter(|d| !d.is_empty())
+            .map(|d| format!(" ({d})"))
+            .unwrap_or_default();
+        Some(format!("La clave de OpenRouter alcanzó su límite de gasto{detalle}. Subí el límite de la clave en OpenRouter y reanudá la investigación."))
     }
 
     /// Estados que se reintenan: saturación o mantenimiento del proveedor.
@@ -315,6 +352,12 @@ pub trait ClienteLlm {
     fn ultimo_reintentos(&self) -> i64 {
         0
     }
+
+    /// `finish_reason` del último turno según el proveedor; `Some("length")`
+    /// dice que la respuesta se cortó en el tope de salida.
+    fn ultimo_fin(&self) -> Option<String> {
+        None
+    }
 }
 
 impl ClienteLlm for ClienteLlmOpenRouter {
@@ -336,5 +379,9 @@ impl ClienteLlm for ClienteLlmOpenRouter {
 
     fn ultimo_reintentos(&self) -> i64 {
         self.reintentos.get()
+    }
+
+    fn ultimo_fin(&self) -> Option<String> {
+        self.ultimo_fin.borrow().clone()
     }
 }

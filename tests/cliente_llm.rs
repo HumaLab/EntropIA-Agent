@@ -31,6 +31,7 @@ enum Guion {
 struct ServidorFalso {
     url: String,
     pedidos: Arc<AtomicUsize>,
+    cuerpos: Arc<Mutex<Vec<String>>>,
 }
 
 impl ServidorFalso {
@@ -39,15 +40,19 @@ impl ServidorFalso {
         let addr = listener.local_addr().unwrap();
         let guion = Arc::new(Mutex::new(guion));
         let pedidos = Arc::new(AtomicUsize::new(0));
+        let cuerpos = Arc::new(Mutex::new(Vec::new()));
         let cola = guion.clone();
         let cuenta = pedidos.clone();
+        let recibidos = cuerpos.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
                 let siguiente = cola.lock().unwrap().remove(0);
                 cuenta.fetch_add(1, Ordering::SeqCst);
+                let recibidos = recibidos.clone();
                 std::thread::spawn(move || {
-                    consumir_pedido(&mut stream);
+                    let cuerpo = consumir_pedido(&mut stream);
+                    recibidos.lock().unwrap().push(cuerpo);
                     match siguiente {
                         Guion::Completa(cruda) => {
                             let _ = stream.write_all(cruda.as_bytes());
@@ -70,7 +75,14 @@ impl ServidorFalso {
         Self {
             url: format!("http://{addr}/api/v1/chat/completions"),
             pedidos,
+            cuerpos,
         }
+    }
+
+    /// Cuerpo JSON del pedido `n`, tal como lo mandó el cliente.
+    fn cuerpo(&self, n: usize) -> serde_json::Value {
+        let cuerpos = self.cuerpos.lock().unwrap();
+        serde_json::from_str(&cuerpos[n]).unwrap()
     }
 
     fn pedidos(&self) -> usize {
@@ -78,40 +90,38 @@ impl ServidorFalso {
     }
 }
 
-/// Lee el pedido HTTP completo para que el cliente termine de escribirlo.
-fn consumir_pedido(stream: &mut std::net::TcpStream) {
+/// Lee el pedido HTTP completo para que el cliente termine de escribirlo y
+/// devuelve su cuerpo.
+fn consumir_pedido(stream: &mut std::net::TcpStream) -> String {
+    let mut leido: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; 16_384];
-    let mut leido = 0;
     loop {
-        let Ok(n) = stream.read(&mut buf[leido..]) else {
-            return;
+        let Ok(n) = stream.read(&mut buf) else {
+            return String::new();
         };
         if n == 0 {
-            return;
+            return String::new();
         }
-        leido += n;
-        if let Some(fin) = buf[..leido].windows(4).position(|w| w == b"\r\n\r\n") {
-            let texto = String::from_utf8_lossy(&buf[..leido]).to_string();
-            let largo: usize = texto
+        leido.extend_from_slice(&buf[..n]);
+        if let Some(fin) = leido.windows(4).position(|w| w == b"\r\n\r\n") {
+            let cabeceras = String::from_utf8_lossy(&leido[..fin]).to_string();
+            let largo: usize = cabeceras
                 .split("Content-Length:")
                 .nth(1)
+                .or_else(|| cabeceras.split("content-length:").nth(1))
                 .and_then(|s| s.split("\r\n").next())
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(0);
-            let mut cuerpo = leido - (fin + 4);
-            while cuerpo < largo {
+            while leido.len() - (fin + 4) < largo {
                 let Ok(n) = stream.read(&mut buf) else {
-                    return;
+                    break;
                 };
                 if n == 0 {
-                    return;
+                    break;
                 }
-                cuerpo += n;
+                leido.extend_from_slice(&buf[..n]);
             }
-            return;
-        }
-        if leido == buf.len() {
-            return;
+            return String::from_utf8_lossy(&leido[fin + 4..]).to_string();
         }
     }
 }
@@ -279,4 +289,82 @@ fn un_cuerpo_vacio_se_reintenta() {
     }
     assert_eq!(cliente.ultimo_reintentos(), 1);
     assert_eq!(servidor.pedidos(), 2);
+}
+
+#[test]
+fn el_pedido_reserva_16384_tokens_de_salida() {
+    // Con 4096 el asistente de archivo se cortaba: el razonamiento y las citas
+    // literales de un lote de 48 KB no entraban.
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta("200 OK", &ok()))]);
+    let cliente =
+        ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
+    turno(&cliente).unwrap();
+    assert_eq!(servidor.cuerpo(0)["max_tokens"], json!(16_384));
+}
+
+#[test]
+fn el_finish_reason_del_ultimo_turno_queda_a_la_vista() {
+    let cortada = json!({"choices":[{"message":{"content":"{\"summary\":\"a medi"},"finish_reason":"length"}],"usage":{"cost":0.1}}).to_string();
+    let servidor = ServidorFalso::nuevo(vec![
+        Guion::Completa(respuesta("200 OK", &cortada)),
+        Guion::Completa(respuesta("200 OK", &ok())),
+    ]);
+    let cliente =
+        ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
+    match turno(&cliente).unwrap() {
+        TurnoAgente::Texto(t) => assert_eq!(t, "{\"summary\":\"a medi"),
+        _ => panic!("no se pidieron herramientas"),
+    }
+    assert_eq!(cliente.ultimo_fin().as_deref(), Some("length"));
+    // Un turno sin finish_reason no hereda el del anterior.
+    turno(&cliente).unwrap();
+    assert_eq!(cliente.ultimo_fin(), None);
+    assert_eq!(servidor.pedidos(), 2);
+}
+
+#[test]
+fn un_content_nulo_es_texto_vacio_con_su_finish_reason() {
+    let vacia = json!({"choices":[{"message":{"content":null},"finish_reason":"length"}],"usage":{"cost":0.1}}).to_string();
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta("200 OK", &vacia))]);
+    let cliente =
+        ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
+    match turno(&cliente).unwrap() {
+        TurnoAgente::Texto(t) => assert_eq!(t, ""),
+        _ => panic!("no se pidieron herramientas"),
+    }
+    assert_eq!(cliente.ultimo_fin().as_deref(), Some("length"));
+    assert_eq!(servidor.pedidos(), 1);
+}
+
+#[test]
+fn un_403_por_limite_de_la_clave_da_un_mensaje_claro_sin_la_url() {
+    // El cuerpo real que recibió el historiador, con la URL de gestión de la
+    // clave: no tiene que llegar a la pantalla.
+    let cuerpo = json!({"error":{"message":"Key limit exceeded (monthly limit). Manage it using https://openrouter.ai/workspaces/default/keys/249bbaf6 $5.00 of $5.00 used; resets 2026-12-01T00:00:00.000Z.","code":403,"metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise or remove the key limit"}}}).to_string();
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta("403 Forbidden", &cuerpo))]);
+    let cliente =
+        ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
+    let error = error_de(turno(&cliente));
+    assert_eq!(
+        error,
+        "La clave de OpenRouter alcanzó su límite de gasto ($5.00 of $5.00 used; resets 2026-12-01T00:00:00.000Z). Subí el límite de la clave en OpenRouter y reanudá la investigación."
+    );
+    assert_eq!(servidor.pedidos(), 1);
+    assert_eq!(cliente.ultimo_reintentos(), 0);
+}
+
+#[test]
+fn un_403_que_no_es_el_limite_de_la_clave_conserva_el_mensaje_de_siempre() {
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta(
+        "403 Forbidden",
+        "{\"error\":{\"message\":\"moderation\"}}",
+    ))]);
+    let cliente =
+        ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
+    let error = error_de(turno(&cliente));
+    assert_eq!(
+        error,
+        "OpenRouter devolvió el estado 403 Forbidden: {\"error\":{\"message\":\"moderation\"}}"
+    );
+    assert_eq!(servidor.pedidos(), 1);
 }

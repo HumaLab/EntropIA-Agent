@@ -1,7 +1,7 @@
 //! Durable research workflow. Creating a record is not permission to execute.
 //! Model inputs and outputs are data; only the state machine authorizes transitions.
 use crate::{
-    cliente_llm::{ClienteLlm, TurnoAgente},
+    cliente_llm::{ClienteLlm, ClienteLlmOpenRouter, TurnoAgente},
     dominio::{ClaseFuente, EstadoEpistemico, Ledger, RelacionEvidencia, TipoClaim},
     estado::{ahora, nuevo_id, EstadoDb},
     fuente_bibliografica::{FuenteBibliografica, PasajeBibliografico, Ubicacion},
@@ -1050,6 +1050,10 @@ impl Engine<'_> {
     /// Una llamada al modelo. `pedida_por_historiador` la exime del freno del
     /// presupuesto —se registra y cuenta igual— y la deja marcada en su
     /// artefacto de entrada.
+    ///
+    /// Una salida inválida que no se pudo reparar no es un error del job: el
+    /// rol se degrada, el evento lo declara y el contrato cae en su default.
+    /// Quien necesite distinguirla usa `llamar_detallado`.
     fn llamar<T: DeserializeOwned + Default>(
         &self,
         id: &str,
@@ -1058,6 +1062,34 @@ impl Engine<'_> {
         data: Value,
         pedida_por_historiador: bool,
     ) -> Result<T, String> {
+        match self.llamar_detallado::<T>(id, role, contract, data, pedida_por_historiador)? {
+            Ok(value) => Ok(value),
+            Err(msg) => {
+                let warning = format!("Salida inválida de {role}: {msg}");
+                self.transaction(|| {
+                    self.event(id, "role_warning", json!({"role":role,"error":warning}))
+                })?;
+                Ok(T::default())
+            }
+        }
+    }
+    /// Una llamada al modelo con la salida clasificada. El `Err` exterior es
+    /// el fallo de transporte, que no se repara; el `Err` interior es una
+    /// salida inválida, con el motivo a la vista del rol.
+    ///
+    /// Una respuesta vacía o una que el proveedor declara cortada por el tope
+    /// de salida no se reparan: la reparación reenvía el mismo insumo y pide
+    /// el objeto entero bajo el mismo tope, así que se vuelve a cortar en el
+    /// mismo lugar y sólo gasta una llamada. La reparación queda para las
+    /// salidas que no cumplen el contrato por otra razón.
+    fn llamar_detallado<T: DeserializeOwned + Default>(
+        &self,
+        id: &str,
+        role: &str,
+        contract: &str,
+        data: Value,
+        pedida_por_historiador: bool,
+    ) -> Result<Result<T, String>, String> {
         let call = if pedida_por_historiador {
             self.registrar_llamada(id, role)?
         } else {
@@ -1080,6 +1112,9 @@ impl Engine<'_> {
         );
         let cost = self.llm.ultimo_costo();
         let reintentos = self.llm.ultimo_reintentos();
+        // El `finish_reason` es de este turno: se lee antes de la reparación,
+        // que es otro turno y lo pisa.
+        let cortada = self.llm.ultimo_fin().as_deref() == Some("length");
         if let Ok(TurnoAgente::Texto(raw)) = &response {
             self.transaction(|| {
                 self.artifact(
@@ -1096,35 +1131,40 @@ impl Engine<'_> {
         // costo todavía desconocido. El error que asienta es el de transporte:
         // una salida que no cumple el contrato no es un error de la llamada.
         self.cerrar_llamada(id, &call, response.as_ref().err(), cost, reintentos)?;
-        let parsed = match response {
-            Ok(TurnoAgente::Texto(s)) => match decodificar_salida::<T>(&s) {
-                Ok(value) => Ok(value),
-                Err(e) => {
-                    // Una sola reparación: si la respuesta corregida tampoco
-                    // cumple, el rol cae en su default con el error de la
-                    // salida original.
-                    match self.reparar_salida::<T>(id, role, contract, &input["data"], &s, &e) {
-                        Ok(Some(value)) => Ok(value),
-                        Ok(None) => {
-                            let warning = format!("Salida inválida de {role}: {e}");
-                            self.transaction(|| {
-                                self.event(id, "role_warning", json!({"role":role,"error":warning}))
-                            })?;
-                            Ok(T::default())
+        match response {
+            Ok(TurnoAgente::Texto(s)) => {
+                let tope = ClienteLlmOpenRouter::MAX_TOKENS_SALIDA;
+                if s.trim().is_empty() {
+                    let mut msg = "el modelo devolvió una respuesta vacía".to_string();
+                    if cortada {
+                        msg.push_str(&format!(" (agotó el límite de salida de {tope} tokens)"));
+                    }
+                    return Ok(Err(msg));
+                }
+                match decodificar_salida::<T>(&s) {
+                    Ok(value) => Ok(Ok(value)),
+                    Err(_) if cortada => Ok(Err(format!(
+                        "la respuesta del modelo se cortó al llegar al límite de salida ({tope} tokens)"
+                    ))),
+                    Err(e) => {
+                        // Una sola reparación: si la respuesta corregida tampoco
+                        // cumple, el rol cae en su default con el error de la
+                        // salida original.
+                        match self.reparar_salida::<T>(id, role, contract, &input["data"], &s, &e)? {
+                            Some(value) => Ok(Ok(value)),
+                            None => Ok(Err(e)),
                         }
-                        Err(fallo) => Err(fallo),
                     }
                 }
-            },
+            }
             Ok(_) => {
                 self.transaction(|| {
                     self.event(id, "role_warning", json!({"role":role,"error":format!("{role} pidió herramientas fuera de su contrato")}))
                 })?;
-                Ok(T::default())
+                Ok(Ok(T::default()))
             }
             Err(e) => Err(e),
-        };
-        parsed
+        }
     }
 
     /// Pide UNA reparación cuando la salida del rol no cumple el contrato: la
@@ -1953,36 +1993,91 @@ impl Engine<'_> {
             .unwrap_or(0) as usize;
         if offset < evidence.len() {
             let design = self.current(id, "design")?;
-            let mut input = json!({"design": design, "evidence": []});
-            let mut supplied = Vec::new();
-            for original in evidence.iter().skip(offset) {
-                let mut entry = original.clone();
-                entry["id"] = json!(format!("E{}", supplied.len() + 1));
-                input["evidence"].as_array_mut().unwrap().push(entry);
-                if input.to_string().len() > 48_000 {
-                    input["evidence"].as_array_mut().unwrap().pop();
+            let contract = format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],quotes:[{{evidence_id:string,quote:string}}],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id, y quotes con el pasaje LITERAL de evidence[].text que lo sostiene, copiado carácter por carácter sin resumir ni corregir. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids, y sin nombrar los IDs E1, E2…: son internos de este lote y el investigador que lee el informe no sabe qué son. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim);
+            // El lote se arma con el tope más grande que quepa. Si el modelo no
+            // lo puede cerrar —respuesta vacía, cortada por el tope de salida o
+            // sin JSON— se reintenta el MISMO offset con la mitad del insumo, y
+            // después con un cuarto: menos documentos por lote es menos salida
+            // pedida, que es lo único que destraba un lote que no entra. Un
+            // tope que no suma documentos respecto del anterior no se prueba:
+            // es el mismo lote por otra llamada.
+            let mut input = Value::Null;
+            let mut supplied: Vec<Value> = Vec::new();
+            let mut salida: Option<Archive> = None;
+            let mut intentos = 0usize;
+            let mut items_del_primer_intento = 0usize;
+            let mut items_previos: Option<usize> = None;
+            let mut ultimo_error = String::new();
+            for presupuesto in [48_000usize, 24_000, 12_000] {
+                let (candidato, suministrados) =
+                    armar_lote(&design, evidence.iter().skip(offset), presupuesto);
+                if intentos == 0 && suministrados.is_empty() {
+                    // Ni el primer documento entra en el lote más grande: se
+                    // omite y el lote sigue con el siguiente, como hasta ahora.
+                    let skipped = evidence[offset]["id"].as_str().unwrap_or("sin-id");
+                    input = candidato;
+                    supplied = suministrados;
+                    salida = Some(Archive {
+                        summary: String::new(),
+                        claims: vec![],
+                        limitations: vec![Claim {
+                            text: format!("ítem omitido: no entra en el lote de 48 KB ({skipped})"),
+                            interpretative: true,
+                            ..Default::default()
+                        }],
+                    });
                     break;
                 }
-                supplied.push(original.clone());
-            }
-            let output: Archive = if supplied.is_empty() {
-                let skipped = evidence[offset]["id"].as_str().unwrap_or("sin-id");
-                Archive {
-                    summary: String::new(),
-                    claims: vec![],
-                    limitations: vec![Claim {
-                        text: format!("ítem omitido: no entra en el lote de 48 KB ({skipped})"),
-                        interpretative: true,
-                        ..Default::default()
-                    }],
+                if suministrados.is_empty() || Some(suministrados.len()) == items_previos {
+                    continue;
                 }
-            } else {
-                self.call(
+                items_previos = Some(suministrados.len());
+                if intentos == 0 {
+                    items_del_primer_intento = suministrados.len();
+                }
+                let respuesta = self.llamar_detallado::<Archive>(
                     id,
                     "asistente_archivo",
-                    &format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],quotes:[{{evidence_id:string,quote:string}}],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id, y quotes con el pasaje LITERAL de evidence[].text que lo sostiene, copiado carácter por carácter sin resumir ni corregir. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids, y sin nombrar los IDs E1, E2…: son internos de este lote y el investigador que lee el informe no sabe qué son. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim),
-                    input.clone(),
-                )?
+                    &contract,
+                    candidato.clone(),
+                    false,
+                )?;
+                intentos += 1;
+                let items = suministrados.len();
+                input = candidato;
+                supplied = suministrados;
+                let fallo = match respuesta {
+                    Ok(archive) if !archivo_vacio(&archive) => {
+                        salida = Some(archive);
+                        break;
+                    }
+                    // Un archivo sin síntesis, sin claims y sin limitaciones no
+                    // es una salida válida: es el modelo sin decir nada, o un
+                    // `{}` que decodifica por los `#[serde(default)]`.
+                    Ok(_) => "el modelo devolvió un resultado sin contenido".to_string(),
+                    Err(msg) => msg,
+                };
+                ultimo_error = fallo.clone();
+                let batch = batches.len() + 1;
+                self.transaction(|| {
+                    self.event(
+                        id,
+                        "archive_retry",
+                        json!({"batch":batch,"budget":presupuesto,"items":items,"error":fallo}),
+                    )
+                })?;
+            }
+            let Some(output) = salida else {
+                // Ningún tamaño de lote cerró el lote: no se registra nada —ni
+                // checkpoint ni omisión— y la investigación queda en pausa
+                // sobre este mismo offset, que es lo que reanuda el reintento.
+                return Err(format!(
+                    "El lote de archivo {batch} (documentos {}–{} de {total}) no se pudo procesar después de {intentos} intentos con lotes más chicos: {ultimo_error}. La investigación quedó en pausa; reanudala para reintentar ese lote.",
+                    offset + 1,
+                    offset + items_del_primer_intento,
+                    batch = batches.len() + 1,
+                    total = evidence.len(),
+                ));
             };
             let allowed = input["evidence"].as_array().cloned().unwrap_or_default();
             let mut accepted: Vec<Claim> = Vec::new();
@@ -1994,14 +2089,6 @@ impl Engine<'_> {
                 .collect();
             let mut dropped: Vec<Value> = Vec::new();
             let mut seen = HashSet::new();
-            if output.summary.trim().is_empty()
-                && output.claims.is_empty()
-                && limitations.is_empty()
-            {
-                limitations.push(
-                    json!({"text": "salida de archivo no parseable; lote registrado sin claims"}),
-                );
-            }
             for claim in output.claims {
                 let prefix = if batches.is_empty() {
                     String::new()
@@ -3104,6 +3191,38 @@ fn split_archive_evidence(evidence: Vec<Value>) -> Result<Vec<Value>, String> {
         }
     }
     Ok(out)
+}
+
+/// Arma el insumo de un lote de archivo con los documentos que entran en
+/// `presupuesto` bytes. Los IDs E1… son internos del lote y se reasignan en
+/// cada intento, porque el lote puede achicarse.
+fn armar_lote<'a>(
+    design: &Value,
+    pendientes: impl Iterator<Item = &'a Value>,
+    presupuesto: usize,
+) -> (Value, Vec<Value>) {
+    let mut input = json!({"design": design, "evidence": []});
+    let mut supplied = Vec::new();
+    for original in pendientes {
+        let mut entry = original.clone();
+        entry["id"] = json!(format!("E{}", supplied.len() + 1));
+        input["evidence"].as_array_mut().unwrap().push(entry);
+        if input.to_string().len() > presupuesto {
+            input["evidence"].as_array_mut().unwrap().pop();
+            break;
+        }
+        supplied.push(original.clone());
+    }
+    (input, supplied)
+}
+
+/// Un archivo sin síntesis, sin claims y sin limitaciones no es una salida
+/// válida: es el modelo sin decir nada, o un `{}` que decodifica por los
+/// `#[serde(default)]` del contrato. Cuenta como intento fallido.
+fn archivo_vacio(archive: &Archive) -> bool {
+    archive.summary.trim().is_empty()
+        && archive.claims.is_empty()
+        && archive.limitations.iter().all(|l| l.text.trim().is_empty())
 }
 
 #[cfg(test)]
