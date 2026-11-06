@@ -51,7 +51,10 @@ impl ApiAgente<'_> {
 
     /// `research_create`: crea el job con su recorte y su presupuesto
     /// congelados. `pedido` lleva `question`, `project`, `collection_ids`,
-    /// `max_llm_calls` y, opcionalmente, `max_cost`, `context` y `modalidad`.
+    /// `max_llm_calls` y, opcionalmente, `max_cost`, `context`, `modalidad` y
+    /// `parameters` (los `ParametrosAgente`; ver `docs/parametros-agente.md`).
+    /// Los parámetros se validan antes de escribir nada y quedan congelados en
+    /// el job.
     pub fn research_create(&self, pedido: Value) -> Result<Value, String> {
         let mut request = pedido;
         request["op"] = json!("create");

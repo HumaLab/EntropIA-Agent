@@ -7,6 +7,7 @@
 //! mensaje que no decía qué había pasado.
 
 use entropia_agent::cliente_llm::{AjustesRed, ClienteLlm, ClienteLlmOpenRouter, TurnoAgente};
+use entropia_agent::parametros::ParametrosAgente;
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -367,4 +368,67 @@ fn un_403_que_no_es_el_limite_de_la_clave_conserva_el_mensaje_de_siempre() {
         "OpenRouter devolvió el estado 403 Forbidden: {\"error\":{\"message\":\"moderation\"}}"
     );
     assert_eq!(servidor.pedidos(), 1);
+}
+
+#[test]
+fn sin_parametros_el_pedido_conserva_el_tope_y_la_temperatura_de_siempre() {
+    // PRESERVE: `con_ajustes` cambió para construir el cliente con parámetros
+    // por defecto; el cuerpo que manda no cambia ni un valor.
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta("200 OK", &ok()))]);
+    let cliente =
+        ClienteLlmOpenRouter::con_ajustes("clave", "modelo", ajustes(servidor.url.clone()));
+    turno(&cliente).unwrap();
+    let cuerpo = servidor.cuerpo(0);
+    assert_eq!(cuerpo["max_tokens"], json!(16_384));
+    assert_eq!(cuerpo["temperature"], json!(0.3));
+    assert_eq!(cliente.max_tokens_salida(), 16_384);
+}
+
+#[test]
+fn con_parametros_manda_el_tope_de_salida_y_la_temperatura_configurados() {
+    let servidor = ServidorFalso::nuevo(vec![Guion::Completa(respuesta("200 OK", &ok()))]);
+    let parametros = ParametrosAgente {
+        max_tokens_salida: 4_321,
+        temperatura: 1.4,
+        timeout_s: 5,
+        esperas_reintento_s: vec![],
+        ..ParametrosAgente::default()
+    };
+    let cliente = ClienteLlmOpenRouter::con_parametros_en(
+        "clave",
+        "modelo",
+        servidor.url.clone(),
+        &parametros,
+    );
+    turno(&cliente).unwrap();
+    let cuerpo = servidor.cuerpo(0);
+    assert_eq!(cuerpo["max_tokens"], json!(4_321));
+    assert_eq!(cuerpo["temperature"], json!(1.4));
+}
+
+#[test]
+fn las_esperas_configuradas_deciden_cuantos_intentos_hace_el_cliente() {
+    let rechazo = || {
+        Guion::Completa(respuesta(
+            "503 Service Unavailable",
+            "{\"error\":\"saturado\"}",
+        ))
+    };
+    // Cuatro respuestas de saturación: con tres esperas hay cuatro intentos.
+    let servidor = ServidorFalso::nuevo(vec![rechazo(), rechazo(), rechazo(), rechazo()]);
+    let parametros = ParametrosAgente {
+        timeout_s: 5,
+        esperas_reintento_s: vec![0, 0, 0],
+        ..ParametrosAgente::default()
+    };
+    let cliente = ClienteLlmOpenRouter::con_parametros_en(
+        "clave",
+        "modelo",
+        servidor.url.clone(),
+        &parametros,
+    );
+    let error = error_de(turno(&cliente));
+    assert!(error.contains("tras 4 intentos"), "{error}");
+    assert_eq!(cliente.ultimo_reintentos(), 3);
+    assert_eq!(servidor.pedidos(), 4);
 }
