@@ -119,7 +119,7 @@ por el tope de salida o sin JSON—, se reintenta el mismo offset con el tope
 siguiente. Menos documentos por lote es menos salida pedida, que es lo único que
 destraba un lote que no entra. La evidencia no se saltea nunca.
 
-Cuatro reglas gobiernan la escalera:
+Cinco reglas gobiernan la escalera:
 
 - un tope donde no entra el diseño del lote más un documento no se prueba: no
   puede procesar nada y la llamada se gastaría igual;

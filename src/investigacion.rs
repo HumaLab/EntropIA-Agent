@@ -3545,7 +3545,7 @@ fn armar_lote<'a>(
     pendientes: impl Iterator<Item = &'a Value>,
     presupuesto: usize,
 ) -> Lote {
-    let mut insumo = json!({"design": design, "evidence": []});
+    let mut insumo = insumo_vacio(design);
     let mut usado = insumo.to_string().len();
     let mut documentos: Vec<Value> = Vec::new();
     for original in pendientes {
@@ -3574,7 +3574,13 @@ struct Lote {
 /// Bytes que ocupa el insumo de un lote sin documentos: el diseño más el
 /// esqueleto del contrato.
 fn base_del_lote(design: &Value) -> usize {
-    json!({"design": design, "evidence": []}).to_string().len()
+    insumo_vacio(design).to_string().len()
+}
+
+/// El insumo de un lote de archivo antes de sumarle documentos. Un solo lugar
+/// para su forma: `armar_lote` lo llena y `base_del_lote` mide lo que ocupa.
+fn insumo_vacio(design: &Value) -> Value {
+    json!({"design": design, "evidence": []})
 }
 
 /// Resultado de intentar cerrar un lote de archivo con la escalera de topes.
