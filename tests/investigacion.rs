@@ -951,18 +951,21 @@ fn un_lote_que_no_entra_pausa_la_investigacion_y_reanudar_lo_reintenta() {
     .unwrap();
 
     let reintentos = eventos(&out, "archive_retry");
-    // Los topes más chicos no suman documentos: es el mismo lote y no se
-    // gastan llamadas en él.
-    assert_eq!(reintentos.len(), 1, "{reintentos:?}");
+    // La escalera baja un tope —48 KB, 24 KB— y después prueba el primer
+    // documento solo: el tope más chico ya no achicaba el lote.
+    assert_eq!(reintentos.len(), 2, "{reintentos:?}");
     assert_eq!(reintentos[0]["payload"]["budget"], 48_000);
     assert_eq!(reintentos[0]["payload"]["batch"], 1);
     assert_eq!(
         reintentos[0]["payload"]["error"],
         "la salida no contiene JSON recuperable"
     );
+    assert_eq!(reintentos[1]["payload"]["budget"], 24_000);
+    assert_eq!(reintentos[1]["payload"]["items"], 1);
     let items = reintentos[0]["payload"]["items"].as_u64().unwrap();
-    // Una salida ilegible sin corte declarado conserva la única reparación.
-    assert_eq!(model.archive_inputs.borrow().len(), 2);
+    // Una salida ilegible sin corte declarado conserva la única reparación,
+    // en los dos intentos.
+    assert_eq!(model.archive_inputs.borrow().len(), 4);
 
     // La investigación queda en pausa sin inventar un checkpoint que dé la
     // evidencia por leída.
@@ -996,19 +999,21 @@ fn un_lote_que_no_entra_pausa_la_investigacion_y_reanudar_lo_reintenta() {
     )
     .unwrap();
     assert_eq!(out["job"]["status"], "running");
-    assert_eq!(model.archive_inputs.borrow().len(), 3);
+    assert_eq!(model.archive_inputs.borrow().len(), 5);
     assert_eq!(
-        model.archive_inputs.borrow()[2],
+        model.archive_inputs.borrow()[4],
         model.archive_inputs.borrow()[0]
     );
     let total = artefacto(&out, "archive_source")["evidence"]
         .as_array()
         .unwrap()
         .len();
-    // El error de la pausa nombra el lote, sus documentos y el motivo, y llega
-    // tanto al llamador como al evento de la investigación.
+    // El error de la pausa nombra el lote, sus documentos, cuántos intentos se
+    // gastaron, con qué topes y el motivo; y llega tanto al llamador como al
+    // evento de la investigación. Los topes son los que el job usó de verdad,
+    // en KB decimales como el resto de los mensajes.
     let esperado = format!(
-        "El lote de archivo 1 (documentos 1–{items} de {total}) no se pudo procesar después de 1 intentos con lotes más chicos: la salida no contiene JSON recuperable. La investigación quedó en pausa; reanudala para reintentar ese lote."
+        "El lote de archivo 1 (documentos 1–{items} de {total}) no se pudo procesar en 2 intentos (lotes de 48, 24 KB): la salida no contiene JSON recuperable. La investigación quedó en pausa; reanudala para reintentar ese lote."
     );
     assert_eq!(err, esperado);
     assert_eq!(eventos(&out, "research_error").len(), 1);
@@ -1099,6 +1104,324 @@ fn un_documento_que_no_entra_ni_en_el_lote_mas_grande_se_omite_y_el_lote_avanza(
         1
     );
     assert_eq!(out["job"]["status"], "running");
+}
+
+/// Deja un artefacto del job como si lo hubiera escrito el workflow: es la
+/// única forma de guionar un insumo —una evidencia, un diseño— que el corpus
+/// sintético no produce.
+fn plantar_artefacto(state: &std::path::Path, id: &str, kind: &str, version: i64, content: &Value) {
+    let conn = rusqlite::Connection::open(state).unwrap();
+    conn.execute(
+        "INSERT INTO artifacts(id,job_id,tipo,path,padre,version,created_at,content_json) VALUES(?1,?2,?3,'',NULL,?4,0,?5)",
+        rusqlite::params![
+            format!("art-plantado-{kind}-{version}"),
+            id,
+            kind,
+            version,
+            content.to_string()
+        ],
+    )
+    .unwrap();
+}
+
+/// Evidencia ya partida que el corpus sintético no tiene: `documentos`
+/// documentos de `bytes` caracteres, en orden, listos para entrar en un lote.
+fn evidencia_plantada(documentos: usize, bytes: usize) -> Value {
+    let evidence = (1..=documentos)
+        .map(|n| {
+            json!({
+                "id": format!("item-{n}"),
+                "item_id": format!("item-{n}"),
+                "title": format!("documento-{n}"),
+                "text": "x".repeat(bytes),
+                "start": 0,
+                "end": bytes,
+                "provenance": "entropia_chunk"
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({"evidence": evidence})
+}
+
+#[test]
+fn un_tope_que_no_achica_el_lote_prueba_el_primer_documento_solo() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("dominante-state.sqlite");
+    let dir = path.with_extension("dominante-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let base = modelo(false, false);
+    // Dos topes que suministran los MISMOS cuatro documentos: 40 KB y 39 KB.
+    // Con la regla vieja el segundo se descartaba —era el mismo insumo por otra
+    // llamada— y el lote no cerraba nunca; el primer documento solo sí achica.
+    let s = procesar(
+        &db,
+        &repo,
+        &base,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"lotes_archivo_bytes":[40000,39000]}})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    prepare_plan(&db, &repo, &base, &dir, &id);
+    drop(db);
+    plantar_artefacto(
+        &state,
+        &id,
+        "archive_source",
+        1,
+        &evidencia_plantada(5, 8_000),
+    );
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let model = BoundedModel {
+        base,
+        archive_inputs: Default::default(),
+        fail_next: Cell::new(false),
+        garbage_next: Cell::new(false),
+        // Solo el primer intento falla: el que achica el lote lo destraba.
+        fallo_archivo: Cell::new(Some(FalloArchivo::Vacio)),
+        fallos_archivo: Cell::new(1),
+        fin: Default::default(),
+    };
+    let out = procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap();
+
+    // El lote cerró con el primer documento solo, no con los cuatro del primer
+    // intento: el tope más chico no lo destrababa.
+    assert_eq!(out["job"]["status"], "running");
+    assert!(eventos(&out, "research_error").is_empty());
+    let reintentos = eventos(&out, "archive_retry");
+    assert_eq!(reintentos.len(), 1, "{reintentos:?}");
+    assert_eq!(reintentos[0]["payload"]["budget"], 40_000);
+    assert_eq!(reintentos[0]["payload"]["items"], 4, "{reintentos:?}");
+    let insumos = model.archive_inputs.borrow();
+    assert_eq!(insumos.len(), 2, "{insumos:?}");
+    assert!(
+        insumos[1].len() < insumos[0].len() / 3,
+        "el último intento lleva un solo documento: {} vs {}",
+        insumos[1].len(),
+        insumos[0].len()
+    );
+    let lote = artefacto(&out, "archive_batch");
+    assert_eq!(lote["evidence"].as_array().unwrap().len(), 1, "{lote}");
+    assert_eq!(lote["next_offset"], 1);
+    assert!(!lote["claims"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn el_lote_omitido_declara_el_tope_congelado_y_no_el_de_siempre() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("omitido-propio-state.sqlite");
+    let dir = path.with_extension("omitido-propio-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let base = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &base,
+        None,
+        &dir,
+        pedido_create(
+            json!({"parameters":{"lotes_archivo_bytes":[3000],"fragmento_archivo_bytes":2500}}),
+        ),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    prepare_plan(&db, &repo, &base, &dir, &id);
+    drop(db);
+    // Un documento de 60 KB no entra ni en el primer tope de la escalera
+    // congelada: la omisión lo declara con ESE tope, no con el de siempre.
+    plantar_artefacto(
+        &state,
+        &id,
+        "archive_source",
+        1,
+        &evidencia_plantada(1, 60_000),
+    );
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let model = BoundedModel {
+        base,
+        archive_inputs: Default::default(),
+        fail_next: Cell::new(false),
+        garbage_next: Cell::new(false),
+        fallo_archivo: Cell::new(None),
+        fallos_archivo: Cell::new(0),
+        fin: Default::default(),
+    };
+    let out = procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap();
+
+    assert!(model.archive_inputs.borrow().is_empty());
+    assert!(eventos(&out, "archive_retry").is_empty());
+    assert!(eventos(&out, "research_error").is_empty());
+    let lote = artefacto(&out, "archive_batch");
+    assert_eq!(
+        lote["limitations"][0]["text"],
+        "ítem omitido: no entra en el lote de 3 KB (item-1)"
+    );
+    assert_eq!(lote["next_offset"], 1);
+    assert_eq!(out["job"]["status"], "running");
+}
+
+#[test]
+fn un_diseno_que_no_deja_lugar_pausa_en_vez_de_omitir_la_evidencia() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("diseno-grande-state.sqlite");
+    let dir = path.with_extension("diseno-grande-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let base = modelo(false, false);
+    let s = procesar(
+        &db,
+        &repo,
+        &base,
+        None,
+        &dir,
+        pedido_create(
+            json!({"parameters":{"lotes_archivo_bytes":[3000],"fragmento_archivo_bytes":2500}}),
+        ),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    prepare_plan(&db, &repo, &base, &dir, &id);
+    // Un diseño de 4 KB no deja lugar a ningún documento en un lote de 3 KB:
+    // el problema no es el tamaño de la evidencia y omitirla la perdería.
+    let diseno = json!({"hypothesis":"Hubo una huelga","scope":"s".repeat(4_000),"closing_criteria":["Examinar los documentos recuperados"]});
+    let bytes_del_diseno = json!({"design": diseno, "evidence": []}).to_string().len();
+    drop(db);
+    plantar_artefacto(&state, &id, "design", 2, &diseno);
+    plantar_artefacto(
+        &state,
+        &id,
+        "archive_source",
+        1,
+        &evidencia_plantada(1, 60_000),
+    );
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let model = BoundedModel {
+        base,
+        archive_inputs: Default::default(),
+        fail_next: Cell::new(false),
+        garbage_next: Cell::new(false),
+        fallo_archivo: Cell::new(None),
+        fallos_archivo: Cell::new(0),
+        fin: Default::default(),
+    };
+    let err = procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"advance","job_id":id}),
+    )
+    .unwrap_err();
+    let out = procesar(
+        &db,
+        &repo,
+        &model,
+        None,
+        &dir,
+        json!({"op":"get","job_id":id}),
+    )
+    .unwrap();
+
+    let esperado = format!(
+        "El lote de archivo 1 (documento 1 de 1) no se puede armar con los parámetros de esta investigación: el diseño ocupa {bytes_del_diseno} bytes y no deja lugar a un documento en el primer lote de 3 KB. Reanudar no lo resuelve: creá una investigación nueva con un primer lote de archivo más grande en Configuración → Agente."
+    );
+    assert_eq!(err, esperado);
+    assert_eq!(out["job"]["status"], "paused");
+    assert_eq!(
+        eventos(&out, "research_error")[0]["payload"]["message"],
+        esperado.as_str()
+    );
+    // No se gasta ninguna llamada ni se da la evidencia por omitida.
+    assert!(model.archive_inputs.borrow().is_empty());
+    assert!(eventos(&out, "archive_retry").is_empty());
+    assert!(!out["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["kind"] == "archive_batch"));
+}
+
+#[test]
+fn la_degradacion_por_reintentos_del_archivo_llega_al_informe() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let state = path.with_extension("reintentos-informe-state.sqlite");
+    let dir = path.with_extension("reintentos-informe-artifacts");
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let base = modelo(false, false);
+    // Tres topes que suministran 3, 2 y 1 documento: los dos primeros fallan
+    // y el tercero cierra el lote.
+    let s = procesar(
+        &db,
+        &repo,
+        &base,
+        None,
+        &dir,
+        pedido_create(json!({"parameters":{"lotes_archivo_bytes":[30000,20000,10000]}})),
+    )
+    .unwrap();
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    drop(db);
+    plantar_artefacto(
+        &state,
+        &id,
+        "archive_source",
+        1,
+        &evidencia_plantada(3, 8_000),
+    );
+    let db = EstadoDb::abrir(state.to_str().unwrap()).unwrap();
+    let model = BoundedModel {
+        base,
+        archive_inputs: Default::default(),
+        fail_next: Cell::new(false),
+        garbage_next: Cell::new(false),
+        fallo_archivo: Cell::new(Some(FalloArchivo::Vacio)),
+        fallos_archivo: Cell::new(2),
+        fin: Default::default(),
+    };
+    let out = correr_con(&db, &repo, &model, None, &dir, &id);
+
+    assert_eq!(out["job"]["status"], "done", "{out}");
+    let informe = artefacto(&out, "report");
+    let degradaciones: Vec<&Value> = informe["role_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|w| w["role"] == "asistente_archivo")
+        .collect();
+    assert_eq!(degradaciones.len(), 1, "{degradaciones:?}");
+    assert_eq!(
+        degradaciones[0]["error"], "el lote de archivo necesitó reintentos con lotes más chicos",
+        "{degradaciones:?}"
+    );
+    assert_eq!(degradaciones[0]["times"], 2, "{degradaciones:?}");
+    // Y el investigador lo lee en el documento: los reintentos del archivo no
+    // desaparecen del informe solo porque el lote igual cerró.
+    let md = std::fs::read_to_string(dir.join(&id).join("report.md")).unwrap();
+    assert!(
+        md.contains("**Degradación del pipeline:** el lote de archivo necesitó reintentos con lotes más chicos (asistente_archivo, 2 veces)."),
+        "{md}"
+    );
 }
 
 /// Deja el corpus con una transcripción enorme: el lote de archivo no entra
@@ -4392,6 +4715,146 @@ fn sin_presupuesto_no_hay_reparacion() {
                 .as_str()
                 .unwrap()
                 .contains("Salida inválida de prospeccion")),
+        "{out}"
+    );
+}
+
+/// Modelo que devuelve la prospección cortada por el tope de salida del
+/// proveedor: no es basura, es el contrato a medio escribir con
+/// `finish_reason` «length». El rol no tiene escalera de lotes: lo único que
+/// puede destrabarlo es volver a pedir el mismo contrato más breve.
+struct ModeloCortado {
+    base: Model,
+    /// Cuántas respuestas de prospección salen cortadas antes de contestar.
+    cortes: Cell<usize>,
+    /// La respuesta cortada es vacía en vez de un JSON a medio escribir.
+    vacio: bool,
+    fin: std::cell::RefCell<Option<String>>,
+    /// Mensajes de cada turno, para comprobar qué vio el modelo.
+    mensajes: std::cell::RefCell<Vec<Vec<Value>>>,
+}
+impl ClienteLlm for ModeloCortado {
+    fn modelo(&self) -> &str {
+        self.base.modelo()
+    }
+    fn ultimo_costo(&self) -> Option<f64> {
+        self.base.ultimo_costo()
+    }
+    fn ultimo_fin(&self) -> Option<String> {
+        self.fin.borrow().clone()
+    }
+    fn turno_agente(&self, m: &[Value], t: &[Value]) -> Result<TurnoAgente, String> {
+        self.fin.replace(None);
+        self.mensajes.borrow_mut().push(m.to_vec());
+        let system = m[0]["content"].as_str().unwrap();
+        if system.contains("Rol: prospeccion.") && self.cortes.get() > 0 {
+            self.cortes.set(self.cortes.get() - 1);
+            self.fin.replace(Some("length".into()));
+            let salida = if self.vacio {
+                String::new()
+            } else {
+                r#"{"sufficient":true,"rationale":"Juicio sobre el al"#.to_string()
+            };
+            return Ok(TurnoAgente::Texto(salida));
+        }
+        self.base.turno_agente(m, t)
+    }
+}
+
+fn cortado(cortes: usize, vacio: bool) -> ModeloCortado {
+    ModeloCortado {
+        base: modelo(false, false),
+        cortes: Cell::new(cortes),
+        vacio,
+        fin: Default::default(),
+        mensajes: Default::default(),
+    }
+}
+
+#[test]
+fn una_respuesta_cortada_por_el_tope_se_reintenta_una_vez_mas_breve() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("corte-breve-artifacts");
+    let m = cortado(1, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+
+    // La segunda respuesta cumple el contrato: el rol no se degrada y el
+    // reintento breve es una llamada más.
+    assert_eq!(
+        artefacto(&out, "prospection"),
+        json!({"sufficient":true,"rationale":"Juicio sobre el alcance documental","gaps":[]})
+    );
+    assert_eq!(out["job"]["llm_calls"], 2, "{out}");
+    assert!(eventos(&out, "role_warning").is_empty(), "{out}");
+    // El reintento no reenvía el texto cortado —eso es pedirle al modelo que
+    // siga donde se cortó, bajo el mismo tope— sino que pide lo mismo, más
+    // breve.
+    let segundo = m.mensajes.borrow()[1].clone();
+    let texto = segundo
+        .iter()
+        .filter_map(|msg| msg["content"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(texto.contains("más breve"), "{texto}");
+    assert!(
+        !texto.contains("Juicio sobre el al"),
+        "el texto cortado no se reenvía: {texto}"
+    );
+}
+
+#[test]
+fn si_el_reintento_breve_tambien_se_corta_el_rol_cae_en_su_default() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("corte-dos-artifacts");
+    let m = cortado(2, false);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+
+    assert_eq!(out["job"]["llm_calls"], 2, "un solo reintento breve: {out}");
+    assert_eq!(m.mensajes.borrow().len(), 2, "ni una llamada más");
+    let avisos: Vec<&Value> = eventos(&out, "role_warning")
+        .into_iter()
+        .filter(|e| e["payload"]["role"] == "prospeccion")
+        .collect();
+    assert_eq!(avisos.len(), 1, "{avisos:?}");
+    assert!(
+        avisos[0]["payload"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("se cortó al llegar al límite de salida (16384 tokens)"),
+        "{avisos:?}"
+    );
+}
+
+#[test]
+fn una_respuesta_vacia_de_un_rol_sin_escalera_no_se_reintenta() {
+    let path = common::crear_corpus_sintetico();
+    let repo = RepositorioSqlite::abrir(path.to_str().unwrap()).unwrap();
+    let db = EstadoDb::abrir_en_memoria().unwrap();
+    let dir = path.with_extension("vacia-rol-artifacts");
+    let m = cortado(1, true);
+    let s = create(&db, &repo, &m, &dir);
+    let id = s["job"]["id"].as_str().unwrap().to_owned();
+    let out = step(&db, &repo, &m, &dir, &id);
+
+    // Una respuesta vacía no se repara ni se reintenta: no hay nada que
+    // pedir más breve.
+    assert_eq!(out["job"]["llm_calls"], 1, "{out}");
+    assert_eq!(m.mensajes.borrow().len(), 1, "{out}");
+    assert!(
+        eventos(&out, "role_warning")
+            .iter()
+            .any(|e| e["payload"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("el modelo devolvió una respuesta vacía")),
         "{out}"
     );
 }

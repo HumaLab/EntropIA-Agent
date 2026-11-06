@@ -14,6 +14,7 @@ Goal: the run should not fail; when it does, show a clear message and a retry bu
 - S6. Scope (L13): engine only for now; option chosen verbatim: "Motor ahora (T2, T3, T5)". T4 (desktop) waits.
 - S8. Decisions (L17): a NEW Settings tab "Agente"; ALL parameters including internal algorithm constants; desktop work in a new worktree from origin/main.
 - S7. Every agent parameter is configurable in the Agent tab of Settings, verbatim: "quiero que todos los aprametros del agente s epeudan configurar en la solapa agente de configuración". (L16)
+- S9. Fix the 10 non-blocking review findings of L15; user choice verbatim: "Sí, las 10, arreglá todas". (L25)
 
 ## Tasks
 
@@ -26,6 +27,7 @@ Goal: the run should not fail; when it does, show a clear message and a retry bu
 - T6b [S7, S8] Desktop: new Settings tab "Agente" editing every `ParametrosAgente` field, persisted with the existing settings commands, passed to the engine on create. Depends on T6a. Route: gentle-ai-worker. Commit: EntropIA-Pro-Lite 1fa14849.
 - T5 [S2] Client: OpenRouter 403 key limit becomes a clear message without the raw JSON or key URL. Route: inline, test-first, same unit as T2a. Commit: aa3bd98.
 
+- T7 [S9] Engine: fix the 10 review findings of L15 (findings reconstructed from id + location; full reviewer text was not persisted). Route: gentle-ai-worker. Commit: see L26.
 ## Log
 
 - L1 (user, verbatim): "En la app de escritorio EntropIA Lite pasa que cuando ejecuto una una vestigación en el Agente de Investigación sobre un corpus o varios corpus, muchas veces falla y el mensaje no es claro, lo ideal es que no falle y que si falla tenga un mensaje claro y un botón de reintento, como se hace en los procesameintos por lotes, me gustaria que hagas un monitoreo del funcionamiento de la investigación, ya estoy disparnado una nueva, monitoreala y andá anotando loq eu falla para resolverlo. Mensaje de error del agente de investigación: Limitaciones\nsalida de archivo no parseable; lote registrado sin claims\nDegradación del pipeline: Salida inválida de asistente_archivo: la salida no contiene JSON recuperable (asistente_archivo, 4 veces)."
@@ -52,3 +54,14 @@ Goal: the run should not fail; when it does, show a clear message and a retry bu
 - L22 (evidence, T6b): desktop commit `1fa14849`: a new `AgentParametersTab.svelte` after "Parámetros RAG", the settings key `research_agent_parameters` (JSON), and the Tauri commands `research_parameters_defaults` and `research_parameters_validate`. `create` carries the saved parameters; later steps build the client from the job's frozen `parameters` artifact. RED was observed by the worker in both Rust and Vitest. GREEN: 165 view, settings and i18n tests; 22 `research::` Rust tests and 7 `acl_manifest_guard` tests; clippy, typecheck and lint clean. Parent fix: one English help string used "item", which the terminology test forbids. The research budget remains per job (`ResearchView.svelte` 80 calls by default). Not committed: `Cargo.lock`, rewritten by the local `[patch]`. The desktop branch only builds in CI after engine PR 2 reaches engine `main` and `cargo update -p entropia-agent` re-pins the lock.
 - L23 (delivery): the user approved both steps ("si, los dos"). Engine PR #2 (https://github.com/HumaLab/EntropIA-Agent/pull/2, `5a5e5a5`) merged into engine `main` as `ceb8e29`. Desktop: removed the local `[patch]` and restored the patched lock, then rebased `feat/research-agent-settings` onto origin/main `e38e3d59` (new commits `9dc8ee0f`, `3dce0aaa`). `cargo update -p entropia-agent` also rewrote 8 unrelated `windows-sys` references through its Rust-1.90-compatible resolution, so the lock change was made by hand on the `entropia-agent` source line only (`f010d01` → `ceb8e29`) and validated with `--locked` builds.
 - L24 (delivery): desktop commit `ecaded39` pins `entropia-agent` to `ceb8e29`, changing one lock line. Desktop PR #231 (https://github.com/HumaLab/EntropIA-Pro-Lite/pull/231) is open with `9dc8ee0f`, `3dce0aaa` and `ecaded39`. Checks run before opening it: 165 vitest, svelte-check, eslint 10, 22 `research::` tests and 7 `acl_manifest_guard` tests, and clippy, all `--locked` against the published engine. CI is being watched. Merging the desktop PR is the user's call.
+- L25 (user, verbatim): "vamos con la s10" — clarified as the 10 review findings; option chosen: "Sí, las 10, arreglá todas". Branch `fix/review-findings` from engine main `d9db875`. The reviewer payload kept only id, lens, severity and location; each fix is derived from the id and the code at `ce6268b`.
+- L26 (evidence, T7): 3 of the 10 findings were already resolved by `5a5e5a5`: R2-budget-constants, R4-tope-hardcodeado-en-mensajes, and the hardcoded-KB half of R3-001. The other 7 are fixed:
+  - new pause message listing the budgets tried (R2-pause-message-attempts, R4-mensaje-pausa-confuso);
+  - `intentar_lote_de_archivo`/`IntentoDeLote` (R2-retry-loop-state);
+  - a design that leaves no room no longer omits evidence (R3-001);
+  - incremental `armar_lote` (R3-002);
+  - a final one-document attempt when a budget does not shrink the batch (R4-ladder-no-achica-documento-dominante);
+  - archive `role_warning` aggregated in the report (R4-role_warning-desaparece-para-archivo);
+  - one "shorter answer" retry for truncated answers outside the archive (R4-truncacion-salta-reparacion).
+
+  RED: the worker observed 6 failing tests. Parent fix: the `SinLugar` pause told the user to resume, but resuming fails deterministically because the design and parameters are frozen. It now says "Reanudar no lo resuelve: creá una investigación nueva con un primer lote de archivo más grande en Configuración → Agente." Observed RED on `un_diseno_que_no_deja_lugar_pausa_en_vez_de_omitir_la_evidencia`, then GREEN. Suite: lib 206, investigacion 93, cliente_llm 15, parametros 8; clippy and fmt clean.
