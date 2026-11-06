@@ -536,6 +536,18 @@ pub fn procesar_con(
     e.snapshot(id, false)
 }
 
+/// Qué hace una llamada con una respuesta que el proveedor cortó por el tope
+/// de salida.
+#[derive(Clone, Copy)]
+enum Corte {
+    /// Pedir una vez el mismo contrato más breve: es la única salida de un rol
+    /// que no tiene escalera de lotes.
+    ReintentarMasBreve,
+    /// Cobrarla como error: el lote de archivo tiene su propia escalera y
+    /// reenviar el mismo insumo se corta en el mismo lugar.
+    Fallar,
+}
+
 struct Engine<'a> {
     db: &'a EstadoDb,
     repo: &'a RepositorioSqlite,
@@ -1097,7 +1109,14 @@ impl Engine<'_> {
         data: Value,
         pedida_por_historiador: bool,
     ) -> Result<T, String> {
-        match self.llamar_detallado::<T>(id, role, contract, data, pedida_por_historiador)? {
+        match self.llamar_detallado::<T>(
+            id,
+            role,
+            contract,
+            data,
+            pedida_por_historiador,
+            Corte::ReintentarMasBreve,
+        )? {
             Ok(value) => Ok(value),
             Err(msg) => {
                 let warning = format!("Salida inválida de {role}: {msg}");
@@ -1112,11 +1131,13 @@ impl Engine<'_> {
     /// el fallo de transporte, que no se repara; el `Err` interior es una
     /// salida inválida, con el motivo a la vista del rol.
     ///
-    /// Una respuesta vacía o una que el proveedor declara cortada por el tope
-    /// de salida no se reparan: la reparación reenvía el mismo insumo y pide
-    /// el objeto entero bajo el mismo tope, así que se vuelve a cortar en el
-    /// mismo lugar y sólo gasta una llamada. La reparación queda para las
-    /// salidas que no cumplen el contrato por otra razón.
+    /// Una respuesta vacía no se repara: no hay nada que pedir de nuevo. Una
+    /// respuesta que el proveedor declara cortada por el tope de salida se
+    /// trata según `corte`: el archivo —que tiene su escalera de lotes— la
+    /// cobra como error, y los demás roles piden una vez el mismo contrato más
+    /// breve, porque reenviar el mismo insumo bajo el mismo tope se corta en el
+    /// mismo lugar. La reparación queda para las salidas que no cumplen el
+    /// contrato por otra razón.
     fn llamar_detallado<T: DeserializeOwned + Default>(
         &self,
         id: &str,
@@ -1124,6 +1145,7 @@ impl Engine<'_> {
         contract: &str,
         data: Value,
         pedida_por_historiador: bool,
+        corte: Corte,
     ) -> Result<Result<T, String>, String> {
         let call = if pedida_por_historiador {
             self.registrar_llamada(id, role)?
@@ -1178,14 +1200,38 @@ impl Engine<'_> {
                 }
                 match decodificar_salida::<T>(&s) {
                     Ok(value) => Ok(Ok(value)),
-                    Err(_) if cortada => Ok(Err(format!(
-                        "la respuesta del modelo se cortó al llegar al límite de salida ({tope} tokens)"
-                    ))),
+                    Err(_) if cortada => {
+                        let motivo = format!(
+                            "la respuesta del modelo se cortó al llegar al límite de salida ({tope} tokens)"
+                        );
+                        match corte {
+                            Corte::ReintentarMasBreve => {
+                                match self.reintentar_mas_breve::<T>(
+                                    id,
+                                    role,
+                                    contract,
+                                    &input["data"],
+                                    &motivo,
+                                )? {
+                                    Some(value) => Ok(Ok(value)),
+                                    None => Ok(Err(motivo)),
+                                }
+                            }
+                            Corte::Fallar => Ok(Err(motivo)),
+                        }
+                    }
                     Err(e) => {
                         // Una sola reparación: si la respuesta corregida tampoco
                         // cumple, el rol cae en su default con el error de la
                         // salida original.
-                        match self.reparar_salida::<T>(id, role, contract, &input["data"], &s, &e)? {
+                        match self.reparar_salida::<T>(
+                            id,
+                            role,
+                            contract,
+                            &input["data"],
+                            &s,
+                            &e,
+                        )? {
                             Some(value) => Ok(Ok(value)),
                             None => Ok(Err(e)),
                         }
@@ -1200,6 +1246,49 @@ impl Engine<'_> {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Pide UNA respuesta nueva cuando el proveedor cortó la salida por el
+    /// tope de tokens: el mismo pedido, con la instrucción de contestar más
+    /// breve y sin reenviar el texto cortado —reenviarlo es pedirle al modelo
+    /// que siga donde se cortó, bajo el mismo tope—. El rol que no tiene
+    /// escalera de lotes se queda sin otra salida que caer en su default.
+    ///
+    /// Es una llamada más —paga presupuesto como cualquier gasto automático del
+    /// agente y queda en `llm_calls`—. Sin presupuesto, o si la respuesta breve
+    /// tampoco cumple, no hay nada que devolver y el camino estricto conserva
+    /// el motivo del corte.
+    fn reintentar_mas_breve<T: DeserializeOwned>(
+        &self,
+        id: &str,
+        role: &str,
+        contract: &str,
+        data: &Value,
+        motivo: &str,
+    ) -> Result<Option<T>, String> {
+        if self.presupuesto_agotado(id)?.is_some() {
+            return Ok(None);
+        }
+        let call = self.registrar_llamada(id, role)?;
+        let response = self.llm.turno_agente(
+            &[
+                json!({"role":"system","content":format!("{TRUST}\nRol: {role}. Contrato: {contract}")}),
+                json!({"role":"user","content":data.to_string()}),
+                json!({"role":"user","content":format!("Tu respuesta anterior no se pudo leer: {motivo}. Contestá de nuevo el mismo pedido, más breve: devolvé solo el objeto JSON que cumple el contrato ({role}): {contract}. Menos elementos y textos más cortos, pero el objeto completo y bien cerrado.")}),
+            ],
+            &[],
+        );
+        let cost = self.llm.ultimo_costo();
+        let reintentos = self.llm.ultimo_reintentos();
+        let breve = match response {
+            Ok(TurnoAgente::Texto(s)) => decodificar_salida::<T>(&s).ok(),
+            _ => None,
+        };
+        let error = breve
+            .is_none()
+            .then(|| format!("el reintento breve de {role} tampoco cumplió el contrato"));
+        self.cerrar_llamada(id, &call, error.as_ref(), cost, reintentos)?;
+        Ok(breve)
     }
 
     /// Pide UNA reparación cuando la salida del rol no cumple el contrato: la
@@ -2074,96 +2163,77 @@ impl Engine<'_> {
         if offset < evidence.len() {
             let design = self.current(id, "design")?;
             let contract = format!("{{summary:string,claims:[{{id:string,text:string,evidence_ids:string[],quotes:[{{evidence_id:string,quote:string}}],interpretative:boolean}}],limitations:[{{id:string,text:string,interpretative:true}}]}}; claims: SOLO hechos documentados en este lote, cada uno con evidence_ids copiando EXACTAMENTE los IDs E1, E2… de evidence[].id, y quotes con el pasaje LITERAL de evidence[].text que lo sostiene, copiado carácter por carácter sin resumir ni corregir. {} limitations: vacíos de información (ausencias, períodos sin cobertura, preguntas que el lote no responde) SIN evidence_ids, y sin nombrar los IDs E1, E2…: son internos de este lote y el investigador que lee el informe no sabe qué son. No uses títulos ni IDs de item/asset.", self.perfil(workflow).forma_claim);
-            // El lote se arma con el tope más grande que quepa. Si el modelo no
-            // lo puede cerrar —respuesta vacía, cortada por el tope de salida o
-            // sin JSON— se reintenta el MISMO offset con la mitad del insumo, y
-            // después con un cuarto: menos documentos por lote es menos salida
-            // pedida, que es lo único que destraba un lote que no entra. Un
-            // tope que no suma documentos respecto del anterior no se prueba:
-            // es el mismo lote por otra llamada.
-            let mut input = Value::Null;
-            let mut supplied: Vec<Value> = Vec::new();
-            let mut salida: Option<Archive> = None;
-            let mut intentos = 0usize;
-            let mut items_del_primer_intento = 0usize;
-            let mut items_previos: Option<usize> = None;
-            let mut ultimo_error = String::new();
-            // La escalera de topes la congela el job: cada reintento del mismo
-            // lote usa el siguiente, y más chico que el anterior.
-            let primer_tope = parametros.lotes_archivo_bytes[0];
-            for presupuesto in parametros.lotes_archivo_bytes.iter().copied() {
-                let (candidato, suministrados) =
-                    armar_lote(&design, evidence.iter().skip(offset), presupuesto);
-                if intentos == 0 && suministrados.is_empty() {
-                    // Ni el primer documento entra en el lote más grande: se
-                    // omite y el lote sigue con el siguiente, como hasta ahora.
-                    let skipped = evidence[offset]["id"].as_str().unwrap_or("sin-id");
-                    input = candidato;
-                    supplied = suministrados;
-                    salida = Some(Archive {
+            // El lote se arma con el tope más grande que quepa y, si el modelo
+            // no lo puede cerrar, se reintenta el MISMO offset con el tope
+            // siguiente. La escalera completa vive en `intentar_lote_de_archivo`:
+            // acá sólo se traduce su resultado a la salida del paso, a la
+            // omisión declarada o a la pausa con el motivo a la vista.
+            let pendientes: Vec<Value> = evidence.iter().skip(offset).cloned().collect();
+            let (input, supplied, output) = match self.intentar_lote_de_archivo(
+                id,
+                &contract,
+                &design,
+                &pendientes,
+                &parametros.lotes_archivo_bytes,
+                batches.len() + 1,
+            )? {
+                IntentoDeLote::Cerrado {
+                    archivo,
+                    insumo,
+                    suministrados,
+                } => (insumo, suministrados, archivo),
+                IntentoDeLote::Omitido { omitido } => (
+                    Value::Null,
+                    Vec::new(),
+                    Archive {
                         summary: String::new(),
                         claims: vec![],
                         limitations: vec![Claim {
                             text: format!(
-                                "ítem omitido: no entra en el lote de {} KB ({skipped})",
-                                primer_tope / 1000
+                                "ítem omitido: no entra en el lote de {} KB ({omitido})",
+                                parametros.lotes_archivo_bytes[0] / 1000
                             ),
                             interpretative: true,
                             ..Default::default()
                         }],
-                    });
-                    break;
+                    },
+                ),
+                // Ningún tope de la escalera deja lugar al diseño más un
+                // documento: el lote no se puede armar y dar la evidencia por
+                // omitida la perdería sin que nada lo declare.
+                IntentoDeLote::SinLugar { bytes_del_diseno } => {
+                    // Diseño y parámetros están congelados en el job: reanudar
+                    // daría el mismo resultado, así que el mensaje no lo ofrece.
+                    return Err(format!(
+                        "El lote de archivo {batch} (documento {} de {total}) no se puede armar con los parámetros de esta investigación: el diseño ocupa {bytes_del_diseno} bytes y no deja lugar a un documento en el primer lote de {kb} KB. Reanudar no lo resuelve: creá una investigación nueva con un primer lote de archivo más grande en Configuración → Agente.",
+                        offset + 1,
+                        batch = batches.len() + 1,
+                        total = evidence.len(),
+                        kb = parametros.lotes_archivo_bytes[0] / 1000,
+                    ))
                 }
-                if suministrados.is_empty() || Some(suministrados.len()) == items_previos {
-                    continue;
-                }
-                items_previos = Some(suministrados.len());
-                if intentos == 0 {
-                    items_del_primer_intento = suministrados.len();
-                }
-                let respuesta = self.llamar_detallado::<Archive>(
-                    id,
-                    "asistente_archivo",
-                    &contract,
-                    candidato.clone(),
-                    false,
-                )?;
-                intentos += 1;
-                let items = suministrados.len();
-                input = candidato;
-                supplied = suministrados;
-                let fallo = match respuesta {
-                    Ok(archive) if !archivo_vacio(&archive) => {
-                        salida = Some(archive);
-                        break;
-                    }
-                    // Un archivo sin síntesis, sin claims y sin limitaciones no
-                    // es una salida válida: es el modelo sin decir nada, o un
-                    // `{}` que decodifica por los `#[serde(default)]`.
-                    Ok(_) => "el modelo devolvió un resultado sin contenido".to_string(),
-                    Err(msg) => msg,
-                };
-                ultimo_error = fallo.clone();
-                let batch = batches.len() + 1;
-                self.transaction(|| {
-                    self.event(
-                        id,
-                        "archive_retry",
-                        json!({"batch":batch,"budget":presupuesto,"items":items,"error":fallo}),
-                    )
-                })?;
-            }
-            let Some(output) = salida else {
                 // Ningún tamaño de lote cerró el lote: no se registra nada —ni
                 // checkpoint ni omisión— y la investigación queda en pausa
                 // sobre este mismo offset, que es lo que reanuda el reintento.
-                return Err(format!(
-                    "El lote de archivo {batch} (documentos {}–{} de {total}) no se pudo procesar después de {intentos} intentos con lotes más chicos: {ultimo_error}. La investigación quedó en pausa; reanudala para reintentar ese lote.",
-                    offset + 1,
-                    offset + items_del_primer_intento,
-                    batch = batches.len() + 1,
-                    total = evidence.len(),
-                ));
+                IntentoDeLote::Fallido {
+                    intentos,
+                    probados,
+                    documentos,
+                    ultimo_error,
+                } => {
+                    return Err(format!(
+                        "El lote de archivo {batch} (documentos {}–{} de {total}) no se pudo procesar en {intentos} intentos (lotes de {kb} KB): {ultimo_error}. La investigación quedó en pausa; reanudala para reintentar ese lote.",
+                        offset + 1,
+                        offset + documentos,
+                        batch = batches.len() + 1,
+                        total = evidence.len(),
+                        kb = probados
+                            .iter()
+                            .map(|bytes| (bytes / 1000).to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ))
+                }
             };
             let allowed = input["evidence"].as_array().cloned().unwrap_or_default();
             let mut accepted: Vec<Claim> = Vec::new();
@@ -2280,6 +2350,104 @@ impl Engine<'_> {
         Ok(Some(
             json!({"summary":summaries,"claims":claims,"limitations":limitations,"dropped":dropped,"evidence":evidence}),
         ))
+    }
+
+    /// Cierra un lote de archivo, o dice por qué no se pudo, con la escalera de
+    /// topes que el job congeló.
+    ///
+    /// Un tope que el modelo no puede cerrar —respuesta vacía, cortada por el
+    /// tope de salida o sin JSON— se reintenta con el siguiente: menos
+    /// documentos por lote es menos salida pedida, que es lo único que destraba
+    /// un lote que no entra. La evidencia no se saltea nunca: si ningún tope
+    /// cierra, no se escribe checkpoint y la investigación queda en pausa sobre
+    /// el mismo offset.
+    fn intentar_lote_de_archivo(
+        &self,
+        id: &str,
+        contract: &str,
+        design: &Value,
+        pendientes: &[Value],
+        presupuestos: &[usize],
+        batch: usize,
+    ) -> Result<IntentoDeLote, String> {
+        // El diseño es el mismo en todos los intentos, así que un tope donde
+        // no entra el diseño más un documento no va a procesar nada: se salta
+        // —gastar la llamada o dar la evidencia por omitida es peor— y sólo si
+        // ningún tope lo deja entrar el lote no se puede armar.
+        let base = base_del_lote(design);
+        let mut topes = presupuestos.iter().copied().filter(|tope| *tope > base);
+        let Some(primer_tope) = topes.next() else {
+            return Ok(IntentoDeLote::SinLugar {
+                bytes_del_diseno: base,
+            });
+        };
+        let mut utiles = vec![primer_tope];
+        utiles.extend(topes);
+        let lotes = lotes_de_la_escalera(design, pendientes, &utiles);
+        let Some(primero) = lotes.first() else {
+            // Ningún tope suma un documento pero el diseño sí entra: el primer
+            // documento no entra en el lote y se omite declarándolo, sin gastar
+            // una llamada.
+            let omitido = pendientes
+                .first()
+                .and_then(|v| v["id"].as_str())
+                .unwrap_or("sin-id")
+                .to_string();
+            return Ok(IntentoDeLote::Omitido { omitido });
+        };
+        let mut intentos = 0usize;
+        let mut probados: Vec<usize> = Vec::new();
+        let mut ultimo_error = String::new();
+        let documentos_del_primer_intento = primero.1.documentos.len();
+        for (presupuesto, lote) in lotes {
+            let items = lote.documentos.len();
+            let respuesta = self.llamar_detallado::<Archive>(
+                id,
+                "asistente_archivo",
+                contract,
+                lote.insumo.clone(),
+                false,
+                Corte::Fallar,
+            )?;
+            intentos += 1;
+            probados.push(presupuesto);
+            let fallo = match respuesta {
+                Ok(archivo) if !archivo_vacio(&archivo) => {
+                    return Ok(IntentoDeLote::Cerrado {
+                        archivo,
+                        insumo: lote.insumo,
+                        suministrados: lote.documentos,
+                    });
+                }
+                // Un archivo sin síntesis, sin claims y sin limitaciones no es
+                // una salida válida: es el modelo sin decir nada, o un `{}` que
+                // decodifica por los `#[serde(default)]`.
+                Ok(_) => "el modelo devolvió un resultado sin contenido".to_string(),
+                Err(msg) => msg,
+            };
+            ultimo_error = fallo.clone();
+            // Un intento que no cerró el lote es una degradación del archivo,
+            // aunque el tope siguiente lo destrabe: el informe la declara y
+            // `role_warnings` la cuenta.
+            self.transaction(|| {
+                self.event(
+                    id,
+                    "archive_retry",
+                    json!({"batch":batch,"budget":presupuesto,"items":items,"error":fallo}),
+                )?;
+                self.event(
+                    id,
+                    "role_warning",
+                    json!({"role":"asistente_archivo","error":"el lote de archivo necesitó reintentos con lotes más chicos"}),
+                )
+            })?;
+        }
+        Ok(IntentoDeLote::Fallido {
+            intentos,
+            probados,
+            documentos: documentos_del_primer_intento,
+            ultimo_error,
+        })
     }
 
     fn proyecto(&self, id: &str) -> Result<String, String> {
@@ -3367,24 +3535,110 @@ fn split_archive_evidence(
 /// Arma el insumo de un lote de archivo con los documentos que entran en
 /// `presupuesto` bytes. Los IDs E1… son internos del lote y se reasignan en
 /// cada intento, porque el lote puede achicarse.
+///
+/// El tamaño se mide una vez por documento y se suma: serializar el insumo
+/// entero en cada push cuesta cuadrático y el lote se arma con cada tope de la
+/// escalera. La suma es exacta —al JSON compacto sólo se le intercalan las
+/// comas entre documentos— así que el lote cabe en el tope igual que antes.
 fn armar_lote<'a>(
     design: &Value,
     pendientes: impl Iterator<Item = &'a Value>,
     presupuesto: usize,
-) -> (Value, Vec<Value>) {
-    let mut input = json!({"design": design, "evidence": []});
-    let mut supplied = Vec::new();
+) -> Lote {
+    let mut insumo = insumo_vacio(design);
+    let mut usado = insumo.to_string().len();
+    let mut documentos: Vec<Value> = Vec::new();
     for original in pendientes {
         let mut entry = original.clone();
-        entry["id"] = json!(format!("E{}", supplied.len() + 1));
-        input["evidence"].as_array_mut().unwrap().push(entry);
-        if input.to_string().len() > presupuesto {
-            input["evidence"].as_array_mut().unwrap().pop();
+        entry["id"] = json!(format!("E{}", documentos.len() + 1));
+        let bytes = entry.to_string().len() + usize::from(!documentos.is_empty());
+        if usado.saturating_add(bytes) > presupuesto {
             break;
         }
-        supplied.push(original.clone());
+        usado += bytes;
+        insumo["evidence"].as_array_mut().unwrap().push(entry);
+        documentos.push(original.clone());
     }
-    (input, supplied)
+    Lote { insumo, documentos }
+}
+
+/// Insumo de un lote de archivo: el diseño y los documentos que entran en un
+/// tope, con los IDs E1… que el contrato les hace citar.
+struct Lote {
+    /// El insumo tal como viaja al modelo.
+    insumo: Value,
+    /// Los documentos suministrados, en el orden del insumo.
+    documentos: Vec<Value>,
+}
+
+/// Bytes que ocupa el insumo de un lote sin documentos: el diseño más el
+/// esqueleto del contrato.
+fn base_del_lote(design: &Value) -> usize {
+    insumo_vacio(design).to_string().len()
+}
+
+/// El insumo de un lote de archivo antes de sumarle documentos. Un solo lugar
+/// para su forma: `armar_lote` lo llena y `base_del_lote` mide lo que ocupa.
+fn insumo_vacio(design: &Value) -> Value {
+    json!({"design": design, "evidence": []})
+}
+
+/// Resultado de intentar cerrar un lote de archivo con la escalera de topes.
+enum IntentoDeLote {
+    /// El modelo cerró el lote: su salida, el insumo que la produjo y los
+    /// documentos que se le suministraron.
+    Cerrado {
+        archivo: Archive,
+        insumo: Value,
+        suministrados: Vec<Value>,
+    },
+    /// Ni el primer documento entra en el lote: se omite declarándolo.
+    Omitido { omitido: String },
+    /// Ningún tope deja lugar al diseño más un documento.
+    SinLugar { bytes_del_diseno: usize },
+    /// Ningún tope cerró el lote.
+    Fallido {
+        intentos: usize,
+        /// Topes con los que se gastó una llamada, en orden.
+        probados: Vec<usize>,
+        /// Documentos que traía el primer intento: el tramo que se declara.
+        documentos: usize,
+        ultimo_error: String,
+    },
+}
+
+/// Los lotes que la escalera intenta, en orden: uno por tope que sume
+/// documentos respecto del intento anterior. Un tope que suministra los mismos
+/// documentos es el mismo insumo por otra llamada: si el intento previo llevaba
+/// más de uno, se prueba una sola vez con el primer documento solo, que es lo
+/// único que achica un lote dominado por un fragmento. Con un solo documento ya
+/// no hay nada que achicar y la escalera termina.
+fn lotes_de_la_escalera(
+    design: &Value,
+    pendientes: &[Value],
+    presupuestos: &[usize],
+) -> Vec<(usize, Lote)> {
+    let mut lotes: Vec<(usize, Lote)> = Vec::new();
+    let mut items_previos = 0usize;
+    for presupuesto in presupuestos.iter().copied() {
+        let lote = armar_lote(design, pendientes.iter(), presupuesto);
+        let items = lote.documentos.len();
+        if items == 0 {
+            continue;
+        }
+        if items == items_previos {
+            if items > 1 {
+                // El tope más chico trajo los mismos documentos: achicar el
+                // tope no achica el insumo. El primer documento solo, sí.
+                let solo = armar_lote(design, pendientes.iter().take(1), usize::MAX);
+                lotes.push((presupuesto, solo));
+            }
+            return lotes;
+        }
+        items_previos = items;
+        lotes.push((presupuesto, lote));
+    }
+    lotes
 }
 
 /// Un archivo sin síntesis, sin claims y sin limitaciones no es una salida
@@ -3399,6 +3653,74 @@ fn archivo_vacio(archive: &Archive) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn documentos(n: usize, bytes: usize) -> Vec<Value> {
+        (1..=n)
+            .map(|i| json!({"id": format!("item-{i}"), "text": "x".repeat(bytes)}))
+            .collect()
+    }
+
+    #[test]
+    fn el_lote_entra_en_el_tope_y_suma_solo_los_documentos_que_entran() {
+        let design = json!({"hypothesis":"Hubo una huelga"});
+        let pendientes = documentos(3, 1_000);
+        // Dos documentos justos: lo que mide el insumo serializado, que es lo
+        // que se compara contra el tope. Con un byte menos, el segundo ya no
+        // entra: la medida es exacta, no una estimación.
+        let dos = armar_lote(&design, pendientes.iter().take(2), usize::MAX);
+        assert_eq!(dos.documentos.len(), 2);
+        let justo = dos.insumo.to_string().len();
+        let lote = armar_lote(&design, pendientes.iter(), justo);
+        assert_eq!(lote.documentos, pendientes[..2].to_vec());
+        assert_eq!(
+            lote.insumo.to_string().len(),
+            justo,
+            "el insumo cabe justo en el tope"
+        );
+        assert_eq!(lote.insumo["evidence"][0]["id"], "E1");
+        assert_eq!(lote.insumo["evidence"][1]["id"], "E2");
+        assert_eq!(
+            armar_lote(&design, pendientes.iter(), justo - 1)
+                .documentos
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn un_lote_no_deja_lugar_cuando_el_diseno_solo_no_entra_en_el_tope() {
+        let design = json!({"hypothesis":"h".repeat(500)});
+        // El diseño no entra en el tope: no hay documento que pueda sumarse.
+        assert!(armar_lote(&design, documentos(3, 10).iter(), 100)
+            .documentos
+            .is_empty());
+        // Y el diseño sí entra, pero el primer documento no: el lote tampoco
+        // suma nada, y sin embargo el tope es usable.
+        let design = json!({"hypothesis":"Hubo una huelga"});
+        assert!(armar_lote(&design, documentos(1, 10_000).iter(), 1_000)
+            .documentos
+            .is_empty());
+    }
+
+    #[test]
+    fn la_escalera_salta_el_tope_que_no_achica_el_lote_y_prueba_un_documento() {
+        let design = json!({"hypothesis":"Hubo una huelga"});
+        let pendientes = documentos(3, 1_000);
+        // El tope con el que entran los tres documentos y el más chico que
+        // trae los mismos tres: el segundo no achica el lote.
+        let tres = armar_lote(&design, pendientes.iter(), usize::MAX)
+            .insumo
+            .to_string()
+            .len();
+        let lotes = lotes_de_la_escalera(&design, &pendientes, &[tres + 10, tres, 1_000]);
+        let items: Vec<(usize, usize)> = lotes
+            .iter()
+            .map(|(tope, lote)| (*tope, lote.documentos.len()))
+            .collect();
+        // En vez de gastar la misma llamada, se prueba con el primer documento
+        // solo, y la escalera termina ahí: un documento no se achica más.
+        assert_eq!(items, vec![(tres + 10, 3), (tres, 1)]);
+    }
 
     #[test]
     fn extrae_el_cuerpo_de_una_valla_con_etiqueta() {

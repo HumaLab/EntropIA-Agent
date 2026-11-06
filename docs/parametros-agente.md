@@ -111,6 +111,43 @@ Las reglas que cruzan campos son dos:
 - `fragmento_archivo_bytes` no supera el primer tope de la escalera (un fragmento
   que no entra en ningún lote no se puede procesar nunca).
 
+## Lotes de archivo que no cierran
+
+`lotes_archivo_bytes` es la escalera de intentos del mismo lote: el primero usa
+el tope más grande y, si el modelo no cierra el lote —respuesta vacía, cortada
+por el tope de salida o sin JSON—, se reintenta el mismo offset con el tope
+siguiente. Menos documentos por lote es menos salida pedida, que es lo único que
+destraba un lote que no entra. La evidencia no se saltea nunca.
+
+Cinco reglas gobiernan la escalera:
+
+- un tope donde no entra el diseño del lote más un documento no se prueba: no
+  puede procesar nada y la llamada se gastaría igual;
+- un tope que suministra los mismos documentos que el intento anterior es el
+  mismo insumo por otra llamada: en su lugar se prueba una sola vez con el
+  primer documento solo, que es lo único que achica un lote dominado por un
+  fragmento;
+- si ni el primer documento entra en el primer tope, el lote se omite y la
+  omisión queda declarada en las limitaciones del informe (`ítem omitido: no
+  entra en el lote de <primer tope en KB> KB (<id>)`), sin gastar una llamada;
+- si ningún tope cierra el lote, no se escribe checkpoint ni se omite la
+  evidencia: la investigación queda en pausa con el lote, el tramo de documentos
+  y los topes intentados a la vista (`El lote de archivo 1 (documentos 1–5 de 40)
+  no se pudo procesar en 3 intentos (lotes de 48, 24, 12 KB): …`), y «Reanudar»
+  lo reintenta con la misma escalera;
+- si el diseño no deja lugar a ningún documento en ningún tope, la investigación
+  también queda en pausa, pero reanudar no lo resuelve porque el diseño y los
+  parámetros están congelados: el mensaje lo dice y pide una investigación nueva
+  con un primer lote más grande (`… no se puede armar con los parámetros de esta
+  investigación: … Reanudar no lo resuelve: creá una investigación nueva con un
+  primer lote de archivo más grande en Configuración → Agente.`).
+
+Un lote que sólo cerró después de achicarse es una degradación recuperada: el
+informe la declara en «Degradación del pipeline» y cuenta los intentos fallidos
+(`el lote de archivo necesitó reintentos con lotes más chicos (asistente_archivo,
+2 veces)`). Los topes y los tamaños se miden y se muestran en KB decimales
+(`bytes / 1000`), igual que en el desktop.
+
 ## Congelado y jobs anteriores
 
 1. `create` valida `parameters` y, en la misma transacción del job, escribe el
