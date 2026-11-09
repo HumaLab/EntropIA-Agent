@@ -182,10 +182,13 @@ ORDER BY bm25(rag_chunks_fts) LIMIT ?{}",
         let Ok(mut stmt) = self.conn.prepare(&sql) else {
             return Vec::new();
         };
+        // rusqlite 0.41 ya no convierte usize por su cuenta (puede no caber en
+        // un INTEGER de SQLite); el límite viaja como i64, saturado.
+        let limite_sql = i64::try_from(limite).unwrap_or(i64::MAX);
         let mut parametros: Vec<&dyn ToSql> = Vec::with_capacity(nombres.len() + 2);
         parametros.push(&q);
         parametros.extend(nombres.iter().map(|n| n as &dyn ToSql));
-        parametros.push(&limite);
+        parametros.push(&limite_sql);
         let rows = stmt.query_map(params_from_iter(parametros), |row| row.get::<_, String>(0));
         let Ok(iter) = rows else {
             return Vec::new();
