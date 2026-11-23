@@ -3306,12 +3306,22 @@ fn cite_report(
                     collections,
                     ventana_cita,
                 );
+                // Una cita que no está literal en la fuente no tiene rango
+                // propio: se reproduce la ventana literal de la evidencia, con
+                // su rango, como cuando el claim no trae pasajes. El texto del
+                // modelo nunca se muestra como si fuera de la fuente.
+                let Some(pasaje) = cita_de_pasaje(n, row, collections, q, ventana_cita) else {
+                    if in_section.insert(q.evidence_id.clone()) {
+                        section
+                            .quotes
+                            .push(cita(n, row, collections, true, ventana_cita));
+                    }
+                    continue;
+                };
                 // Una misma fuente puede sostener dos claims con pasajes
                 // distintos: la clave es el par, no la fuente sola.
                 if in_section.insert(format!("{}|{}", q.evidence_id, q.quote)) {
-                    section
-                        .quotes
-                        .push(cita_de_pasaje(n, row, collections, q, ventana_cita));
+                    section.quotes.push(pasaje);
                 }
             }
         }
@@ -3339,22 +3349,27 @@ fn numerar(
 
 /// Cita construida sobre el pasaje verificado. Los offsets se declaran contra
 /// el asset, no contra el fragmento, para que el investigador pueda ir a
-/// buscarlo en la fuente original.
+/// buscarlo en la fuente original. Usa el tramo que `localizar` encontró en el
+/// texto de la evidencia: sin él la cita no está en la fuente y no hay pasaje
+/// que citar (`None`).
 fn cita_de_pasaje(
     n: usize,
     row: &Value,
     collections: &Value,
     q: &Quote,
     ventana_cita: usize,
-) -> Citation {
-    let inicio = row["start"].as_i64().unwrap_or(0) + q.span_start.unwrap_or(0);
-    Citation {
+) -> Option<Citation> {
+    let (Some(desde), Some(hasta)) = (q.span_start, q.span_end) else {
+        return None;
+    };
+    let base = row["start"].as_i64().unwrap_or(0);
+    Some(Citation {
         text: q.quote.clone(),
-        start: inicio,
-        end: inicio + q.quote.chars().count() as i64,
+        start: base + desde,
+        end: base + hasta,
         truncated: false,
         ..cita(n, row, collections, false, ventana_cita)
-    }
+    })
 }
 
 /// Fila de evidencia a partir de un pasaje bibliográfico. El texto del pasaje
@@ -3653,6 +3668,83 @@ fn archivo_vacio(archive: &Archive) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The last chunk of a document is short: 2100–2220. A quote the model
+    /// wrote that is not literally in it has no span; its range must not be
+    /// invented from the model's text and run past the source.
+    #[test]
+    fn every_quote_range_stays_inside_its_source_and_quotes_only_source_text() {
+        let texto: String = "La asamblea resolvió el paro por tiempo indeterminado. "
+            .repeat(3)
+            .chars()
+            .take(120)
+            .collect();
+        let pasaje = "el paro por tiempo indeterminado";
+        let (inicio, fin) = localizar(&texto, pasaje);
+        let inventada = "una cita que el modelo escribió, que no está en el documento fuente y que además es más larga que todo el último fragmento del acta";
+        let claim = Claim {
+            id: "c1".into(),
+            evidence_ids: vec!["e1".into()],
+            quotes: vec![
+                Quote {
+                    evidence_id: "e1".into(),
+                    quote: pasaje.into(),
+                    span_start: inicio,
+                    span_end: fin,
+                },
+                Quote {
+                    evidence_id: "e1".into(),
+                    quote: inventada.into(),
+                    span_start: None,
+                    span_end: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut report = Report {
+            sections: vec![Section {
+                claim_ids: vec!["c1".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let evidence = json!([{
+            "id": "e1", "item_id": "i1", "title": "Acta", "text": texto,
+            "start": 2100, "end": 2220, "collection_id": "col"
+        }]);
+
+        cite_report(&mut report, &[claim], &evidence, &json!([]), 4000);
+
+        let referencia = &report.references[0];
+        assert_eq!((referencia.start, referencia.end), (2100, 2220));
+        let quotes = &report.sections[0].quotes;
+        assert_eq!(
+            quotes.len(),
+            2,
+            "both quotes keep their place in the section"
+        );
+        for q in quotes {
+            assert!(
+                2100 <= q.start && q.start <= q.end && q.end <= 2220,
+                "quote range {}–{} leaves its source 2100–2220",
+                q.start,
+                q.end
+            );
+        }
+        for q in quotes {
+            assert!(
+                texto.contains(&q.text),
+                "a quote reproduces source text: {:?}",
+                q.text
+            );
+        }
+        let ubicada = &quotes[0];
+        assert_eq!(ubicada.text, pasaje);
+        assert_eq!(
+            (ubicada.start, ubicada.end),
+            (2100 + inicio.unwrap(), 2100 + fin.unwrap())
+        );
+    }
 
     fn documentos(n: usize, bytes: usize) -> Vec<Value> {
         (1..=n)
